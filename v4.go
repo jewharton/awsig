@@ -47,11 +47,12 @@ const (
 	signatureV4DecodedLength = 32
 	signatureV4EncodedLength = 64
 
-	chunkMaxLengthEncoded     = "140000000"
-	chunkMaxLength            = 5368709120 // 5 GiB
-	chunkMinLength            = 8000       // 8 KB
-	chunkSignatureHeader      = "chunk-signature="
-	chunkTrailingHeaderPrefix = "x-amz-checksum-"
+	chunkMaxLengthEncoded        = "140000000"
+	chunkMaxLength               = 5368709120 // 5 GiB
+	chunkMinLength               = 8000       // 8 KB
+	chunkSignatureHeader         = "chunk-signature="
+	chunkTrailingHeaderPrefix    = "x-amz-checksum-"
+	chunkTrailingSignaturePrefix = "x-amz-trailer-signature:"
 
 	cr = '\r'
 	lf = '\n'
@@ -82,21 +83,28 @@ type V4Reader struct {
 	multipleChunks  bool
 	trailingHeader  bool
 	trailingSumAlgo checksumAlgorithm
-	date            time.Time
+
+	signingAlgo     signingAlgorithm
+	scope           scope
+	secretAccessKey string
 
 	integrity            expectedIntegrity
 	decodedContentLength int
 
+	chunkCount             int
 	chunkBytesLeft         int
 	chunkSHA256            hash.Hash
 	chunkPreviousSignature signatureV4
 	chunkExpectedSignature signatureV4
 }
 
-func (r *V4Reader) consumeLF() error {
-	buf := make([]byte, 1)
+func (r *V4Reader) consumeLF(buf []byte) error {
+	buf, err := reuseBuffer(buf, 1)
+	if err != nil {
+		return err
+	}
 
-	if _, err := io.ReadFull(r.r, buf); err != nil {
+	if _, err = io.ReadFull(r.r, buf); err != nil {
 		return err
 	}
 
@@ -107,31 +115,36 @@ func (r *V4Reader) consumeLF() error {
 	return nil
 }
 
-func (r *V4Reader) consumeCRLF() error {
-	expected := []byte{cr, lf}
-	actual := make([]byte, len(expected))
-
-	if _, err := io.ReadFull(r.r, actual); err != nil {
+func (r *V4Reader) consumeCRLF(buf []byte) error {
+	buf, err := reuseBuffer(buf, 2)
+	if err != nil {
 		return err
 	}
 
-	if !bytes.Equal(expected, actual) {
+	if _, err = io.ReadFull(r.r, buf); err != nil {
+		return err
+	}
+
+	if buf[0] != cr || buf[1] != lf {
 		return ErrChunkMalformed
 	}
 
 	return nil
 }
 
-func (r *V4Reader) readChunkLength() (int, error) {
+func (r *V4Reader) readChunkLength(buf []byte) (int, error) {
 	var (
 		rawLength      []byte
 		separatorFound bool
 	)
 
-	for i := 0; i < len(chunkMaxLengthEncoded) && !separatorFound; i++ {
-		buf := make([]byte, 1)
+	buf, err := reuseBuffer(buf, 1)
+	if err != nil {
+		return 0, err
+	}
 
-		if _, err := io.ReadFull(r.r, buf); err != nil {
+	for i := 0; i < len(chunkMaxLengthEncoded) && !separatorFound; i++ {
+		if _, err = io.ReadFull(r.r, buf); err != nil {
 			return 0, err
 		}
 
@@ -140,7 +153,7 @@ func (r *V4Reader) readChunkLength() (int, error) {
 				return 0, ErrChunkMalformed
 			}
 
-			if err := r.consumeLF(); err != nil {
+			if err = r.consumeLF(buf); err != nil {
 				return 0, err
 			}
 
@@ -177,69 +190,56 @@ func (r *V4Reader) readChunkLength() (int, error) {
 	return int(length), nil
 }
 
-func (r *V4Reader) readChunkSignature() (signatureV4, error) {
-	if r.unsigned {
-		return nil, nil
-	}
-
-	rawSignatureWithHeader := make([]byte, len(chunkSignatureHeader)+signatureV4EncodedLength)
-
-	if _, err := io.ReadFull(r.r, rawSignatureWithHeader); err != nil {
+func (r *V4Reader) readChunkSignature(prefix string, buf []byte) (signatureV4, error) {
+	buf, err := reuseBuffer(buf, len(prefix)+signatureV4EncodedLength)
+	if err != nil {
 		return nil, err
 	}
 
-	rawSignature := bytes.TrimPrefix(rawSignatureWithHeader, []byte(chunkSignatureHeader))
+	if _, err = io.ReadFull(r.r, buf); err != nil {
+		return nil, err
+	}
+
+	rawSignature := bytes.TrimPrefix(buf, []byte(prefix))
 
 	signature, err := newSignatureV4FromEncoded(rawSignature)
 	if err != nil {
 		return nil, ErrChunkMalformed
 	}
 
-	return signature, r.consumeCRLF()
+	return signature, r.consumeCRLF(buf)
 }
 
-func (r *V4Reader) readChunkSignatureWithoutHeader() (signatureV4, error) {
-	if r.unsigned {
-		return nil, nil
-	}
-
-	rawSignature := make([]byte, signatureV4EncodedLength)
-
-	if _, err := io.ReadFull(r.r, rawSignature); err != nil {
-		return nil, err
-	}
-
-	signature, err := newSignatureV4FromEncoded(rawSignature)
-	if err != nil {
-		return nil, ErrChunkMalformed
-	}
-
-	return signature, r.consumeCRLF()
-}
-
-func (r *V4Reader) readChunkHeader() (int, signatureV4, error) {
-	length, err := r.readChunkLength()
+func (r *V4Reader) readChunkHeader(buf []byte) (int, signatureV4, error) {
+	length, err := r.readChunkLength(buf)
 	if err != nil {
 		return 0, nil, err
 	}
 
-	signature, err := r.readChunkSignature()
-	if err != nil {
-		return 0, nil, err
+	var signature signatureV4
+
+	if !r.unsigned {
+		signature, err = r.readChunkSignature(chunkSignatureHeader, buf)
+		if err != nil {
+			return 0, nil, err
+		}
 	}
 
 	return length, signature, nil
 }
 
-func (r *V4Reader) readChunkTrailer() error {
+func (r *V4Reader) readChunkTrailer(buf []byte) error {
 	name := chunkTrailingHeaderPrefix + r.trailingSumAlgo.String() + ":"
 
 	length := len(name)
 	length += r.trailingSumAlgo.base64Length()
 
-	buf := make([]byte, length+1) // +1 for the trailing LF
+	buf, err := reuseBuffer(buf, length+1) // +1 for the trailing LF
+	if err != nil {
+		return err
+	}
 
-	if _, err := io.ReadFull(r.r, buf); err != nil {
+	if _, err = io.ReadFull(r.r, buf); err != nil {
 		return err
 	}
 
@@ -249,13 +249,23 @@ func (r *V4Reader) readChunkTrailer() error {
 
 	r.integrity.add(r.trailingSumAlgo, string(buf[len(name):len(buf)-1]))
 
-	switch buf[len(buf)-1] {
+	var (
+		trailingByte = buf[len(buf)-1]
+		trailingHash []byte
+	)
+
+	if !r.unsigned {
+		buf[len(buf)-1] = lf
+		trailingHash = sha256Hash(buf)
+	}
+
+	switch trailingByte {
 	case cr:
-		if err := r.consumeLF(); err != nil {
+		if err = r.consumeLF(buf); err != nil {
 			return err
 		}
 	case lf:
-		if err := r.consumeCRLF(); err != nil {
+		if err = r.consumeCRLF(buf); err != nil {
 			return err
 		}
 	default:
@@ -263,19 +273,24 @@ func (r *V4Reader) readChunkTrailer() error {
 	}
 
 	if !r.unsigned {
-		expected, err := r.readChunkSignatureWithoutHeader()
+		expected, err := r.readChunkSignature(chunkTrailingSignaturePrefix, buf)
 		if err != nil {
 			return err
 		}
 
-		buf[len(buf)-1] = lf
-
-		signature := calculateTrailerChunkSignature(r.chunkPreviousSignature, buf)
+		signature := calculateChunkSignature(chunkSignatureData{
+			algorithm:       r.signingAlgo,
+			algorithmSuffix: algorithmSuffixTrailer,
+			scope:           r.scope,
+			previous:        r.chunkPreviousSignature,
+			currentSHA256:   trailingHash,
+			secretAccessKey: r.secretAccessKey,
+		})
 		if !expected.compare(signature) {
 			return ErrSignatureMismatch
 		}
 	} else {
-		if err := r.consumeCRLF(); err != nil {
+		if err = r.consumeCRLF(buf); err != nil {
 			return err
 		}
 	}
@@ -283,13 +298,24 @@ func (r *V4Reader) readChunkTrailer() error {
 	return nil
 }
 
-func (r *V4Reader) close() error {
+func (r *V4Reader) currentChunkSignatureData() chunkSignatureData {
+	return chunkSignatureData{
+		algorithm:       r.signingAlgo,
+		algorithmSuffix: algorithmSuffixPayload,
+		scope:           r.scope,
+		previous:        r.chunkPreviousSignature,
+		currentSHA256:   r.chunkSHA256.Sum(nil),
+		secretAccessKey: r.secretAccessKey,
+	}
+}
+
+func (r *V4Reader) close(buf []byte) error {
 	if r.decodedContentLength != 0 {
 		return ErrDecodedContentLengthIncorrect
 	}
 
 	if !r.unsigned {
-		signature := calculateRegularChunkSignature(r.chunkPreviousSignature, chunkSignatureData{})
+		signature := calculateChunkSignature(r.currentChunkSignatureData())
 		if !r.chunkExpectedSignature.compare(signature) {
 			return ErrSignatureMismatch
 		}
@@ -297,7 +323,7 @@ func (r *V4Reader) close() error {
 	}
 
 	if r.trailingHeader {
-		if err := r.readChunkTrailer(); err != nil {
+		if err := r.readChunkTrailer(buf); err != nil {
 			if errors.Is(err, io.EOF) {
 				return io.ErrUnexpectedEOF
 			}
@@ -305,7 +331,7 @@ func (r *V4Reader) close() error {
 		}
 	}
 
-	if err := r.consumeCRLF(); !errors.Is(err, io.EOF) {
+	if err := r.consumeCRLF(buf); !errors.Is(err, io.EOF) {
 		return ErrChunkMalformed
 	}
 
@@ -314,10 +340,6 @@ func (r *V4Reader) close() error {
 	}
 
 	return io.EOF
-}
-
-func (r *V4Reader) currentChunkSignatureData() chunkSignatureData {
-	return chunkSignatureData{}
 }
 
 func (r *V4Reader) Read(p []byte) (n int, err error) {
@@ -331,7 +353,16 @@ func (r *V4Reader) Read(p []byte) (n int, err error) {
 	}
 
 	if r.chunkBytesLeft == 0 {
-		length, signature, err := r.readChunkHeader()
+		if r.chunkCount > 0 {
+			if err = r.consumeCRLF(p); err != nil {
+				if errors.Is(err, io.EOF) {
+					return n, io.ErrUnexpectedEOF
+				}
+				return n, err
+			}
+		}
+
+		length, signature, err := r.readChunkHeader(p)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return n, io.ErrUnexpectedEOF
@@ -339,15 +370,15 @@ func (r *V4Reader) Read(p []byte) (n int, err error) {
 			return n, err
 		}
 
-		if length == 0 {
-			return n, r.close()
-		}
-
 		r.chunkBytesLeft = length
 
 		if !r.unsigned {
 			r.chunkSHA256.Reset()
 			r.chunkExpectedSignature = signature
+		}
+
+		if length == 0 { // completion chunk
+			return n, r.close(p)
 		}
 	}
 
@@ -357,12 +388,15 @@ func (r *V4Reader) Read(p []byte) (n int, err error) {
 
 	n, err = r.ir.Read(p)
 
-	if r.chunkBytesLeft -= n; r.chunkBytesLeft == 0 && !r.unsigned {
-		signature := calculateRegularChunkSignature(r.chunkPreviousSignature, r.currentChunkSignatureData())
-		if !r.chunkExpectedSignature.compare(signature) {
-			return n, ErrSignatureMismatch
+	if r.chunkBytesLeft -= n; r.chunkBytesLeft == 0 {
+		r.chunkCount++
+		if !r.unsigned {
+			signature := calculateChunkSignature(r.currentChunkSignatureData())
+			if !r.chunkExpectedSignature.compare(signature) {
+				return n, ErrSignatureMismatch
+			}
+			r.chunkPreviousSignature = signature
 		}
-		r.chunkPreviousSignature = signature
 	}
 
 	if r.decodedContentLength -= n; r.decodedContentLength < 0 {
@@ -371,15 +405,6 @@ func (r *V4Reader) Read(p []byte) (n int, err error) {
 
 	if errors.Is(err, io.EOF) {
 		return n, io.ErrUnexpectedEOF
-	}
-
-	if r.chunkBytesLeft == 0 {
-		if r.consumeCRLF(); err != nil {
-			if errors.Is(err, io.EOF) {
-				return n, io.ErrUnexpectedEOF
-			}
-			return n, err
-		}
 	}
 
 	return n, err
@@ -418,32 +443,4 @@ func NewV4(provider CredentialsProvider, region, service string) *V4 {
 		service:  service,
 		now:      time.Now,
 	}
-}
-
-type seedSignatureData struct{}
-
-func extractDataFromHeaders(r *http.Request) seedSignatureData {
-	return seedSignatureData{}
-}
-
-func extractDataFromQuery(r *http.Request) seedSignatureData {
-	return seedSignatureData{}
-}
-
-func calculateSeedSignature(data seedSignatureData) signatureV4 {
-	return nil
-}
-
-type chunkSignatureData struct {
-	algorithm string
-	date      string
-	region    string
-}
-
-func calculateRegularChunkSignature(previous signatureV4, data chunkSignatureData) signatureV4 {
-	return nil
-}
-
-func calculateTrailerChunkSignature(previous signatureV4, header []byte) signatureV4 {
-	return nil
 }
