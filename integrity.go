@@ -97,6 +97,10 @@ func (i *expectedIntegrity) add(a checksumAlgorithm, value string) {
 	}
 }
 
+func (i *expectedIntegrity) addString(a checksumAlgorithm, value string) {
+	i.add(a, value) // TODO(amwolff): unnecessary copy
+}
+
 type integrityReader struct {
 	r io.Reader
 

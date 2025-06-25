@@ -5,12 +5,15 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
-	"net/http"
 	"strings"
-	"time"
 )
 
-const awsISO8601Format = "20060102T150405Z"
+const (
+	timeFormatISO8601  = "20060102T150405Z"
+	timeFormatYYYYMMDD = "20060102"
+
+	signingAlgorithmPrefix = "AWS4-"
+)
 
 type signingAlgorithm int
 
@@ -40,8 +43,6 @@ const (
 
 func (s signingAlgorithmSuffix) String() string {
 	switch s {
-	case algorithmSuffixNone:
-		return ""
 	case algorithmSuffixPayload:
 		return "PAYLOAD"
 	case algorithmSuffixTrailer:
@@ -49,6 +50,16 @@ func (s signingAlgorithmSuffix) String() string {
 	default:
 		return ""
 	}
+}
+
+type scope struct {
+	date    string
+	region  string
+	service string
+}
+
+func (s scope) String() string {
+	return s.date + "/" + s.region + "/" + s.service + "/" + authorizationHeaderCredentialTerminator
 }
 
 type signatureV4 []byte
@@ -72,27 +83,6 @@ func newSignatureV4FromEncoded(b []byte) (signatureV4, error) {
 	return s, nil
 }
 
-func newSignatureV4FromDecoded(b []byte) (signatureV4, error) {
-	if len(b) != signatureV4DecodedLength {
-		return nil, ErrSignatureMalformed
-	}
-
-	s := make(signatureV4, signatureV4DecodedLength)
-
-	copy(s, b)
-
-	return s, nil
-}
-
-func mustNewSignatureV4FromDecoded(b []byte) signatureV4 {
-	s, err := newSignatureV4FromDecoded(b)
-	if err != nil {
-		panic(err)
-	}
-
-	return s
-}
-
 func (s signatureV4) compare(other signatureV4) bool {
 	return subtle.ConstantTimeCompare(s, other) == 1
 }
@@ -101,10 +91,13 @@ func (s signatureV4) String() string {
 	return hex.EncodeToString(s)
 }
 
-func sha256Hash(data []byte) []byte {
-	h := sha256.New()
-	h.Write(data)
-	return h.Sum(nil)
+type signatureData struct {
+	algorithm       signingAlgorithm
+	algorithmSuffix signingAlgorithmSuffix
+	dateTime        string
+	scope           scope
+	previous        signatureV4
+	digest          []byte
 }
 
 func hmacSHA256(key []byte, s string) []byte {
@@ -113,74 +106,43 @@ func hmacSHA256(key []byte, s string) []byte {
 	return h.Sum(nil)
 }
 
-func signingKeyHMACSHA256(key, dateTime, region, service string) []byte {
-	dateKey := hmacSHA256([]byte("AWS4"+key), dateTime)
+func signingKeyHMACSHA256(key, date, region, service string) []byte {
+	dateKey := hmacSHA256([]byte("AWS4"+key), date)
 	dateRegionKey := hmacSHA256(dateKey, region)
 	dateRegionServiceKey := hmacSHA256(dateRegionKey, service)
-	return hmacSHA256(dateRegionServiceKey, "aws4_request")
+	return hmacSHA256(dateRegionServiceKey, authorizationHeaderCredentialTerminator)
 }
 
-type seedSignatureData struct{}
-
-func extractDataFromHeaders(r *http.Request) seedSignatureData {
-	return seedSignatureData{}
-}
-
-func extractDataFromQuery(r *http.Request) seedSignatureData {
-	return seedSignatureData{}
-}
-
-func calculateSeedSignature(data seedSignatureData) signatureV4 {
-	return nil
-}
-
-type scope struct {
-	date    time.Time
-	region  string
-	service string
-}
-
-func (s scope) String() string {
-	return s.date.Format("20060102") + "/" + s.region + "/" + s.service + "/aws4_request"
-}
-
-type chunkSignatureData struct {
-	algorithm       signingAlgorithm
-	algorithmSuffix signingAlgorithmSuffix
-	scope           scope
-	previous        signatureV4
-	currentSHA256   []byte
-	secretAccessKey string
-}
-
-func calculateChunkSignature(data chunkSignatureData) signatureV4 {
+func calculateSignature(data signatureData, secretAccessKey string) signatureV4 {
 	if data.algorithm == algorithmECDSAP256SHA256 {
 		panic("not implemented")
 	}
 
-	dateTime := data.scope.date.Format(awsISO8601Format)
-
 	b := new(strings.Builder)
 
-	b.WriteString("AWS4-")
+	b.WriteString(signingAlgorithmPrefix)
 	b.WriteString(data.algorithm.String())
 	b.WriteString(data.algorithmSuffix.String())
 	b.WriteByte('\n')
-	b.WriteString(dateTime)
+	b.WriteString(data.dateTime)
 	b.WriteByte('\n')
 	b.WriteString(data.scope.String())
 	b.WriteByte('\n')
-	b.WriteString(data.previous.String())
-	b.WriteByte('\n')
 
-	if data.algorithmSuffix == algorithmSuffixPayload {
+	switch data.algorithmSuffix {
+	case algorithmSuffixPayload:
+		b.WriteString(data.previous.String())
+		b.WriteByte('\n')
 		b.WriteString("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+		b.WriteByte('\n')
+	case algorithmSuffixTrailer:
+		b.WriteString(data.previous.String())
 		b.WriteByte('\n')
 	}
 
-	hex.NewEncoder(b).Write(data.currentSHA256)
+	hex.NewEncoder(b).Write(data.digest)
 
-	key := signingKeyHMACSHA256(data.secretAccessKey, dateTime, data.scope.region, data.scope.service)
+	key := signingKeyHMACSHA256(secretAccessKey, data.scope.date, data.scope.region, data.scope.service)
 
-	return mustNewSignatureV4FromDecoded(hmacSHA256(key, b.String()))
+	return hmacSHA256(key, b.String())
 }
