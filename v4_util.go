@@ -44,9 +44,9 @@ const (
 func (s signingAlgorithmSuffix) String() string {
 	switch s {
 	case algorithmSuffixPayload:
-		return "PAYLOAD"
+		return "-PAYLOAD"
 	case algorithmSuffixTrailer:
-		return "TRAILER"
+		return "-TRAILER"
 	default:
 		return ""
 	}
