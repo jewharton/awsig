@@ -8,7 +8,6 @@ import (
 	"hash"
 	"io"
 	"net/http"
-	"net/textproto"
 	"strconv"
 	"strings"
 	"time"
@@ -60,6 +59,7 @@ const (
 	authorizationHeaderCredentialTerminator = "aws4_request"
 
 	headerXAmzContentSha256 = "x-amz-content-sha256"
+	headerContentMD5        = "content-md5"
 
 	unsignedPayload                            = "UNSIGNED-PAYLOAD"
 	streamingUnsignedPayloadTrailer            = "STREAMING-UNSIGNED-PAYLOAD-TRAILER"
@@ -543,33 +543,59 @@ func (v4 *V4) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.Hea
 	}
 	rawSignedHeaders = rawSignedHeaders[len(authorizationHeaderSignedHeadersPrefix):]
 
-	// TODO(amwolff): there's a lot of senseless copying going on here ↓
-
 	signedHeaders := strings.Split(rawSignedHeaders, ";")
 	signedHeadersLookup := make(map[string]struct{})
 
-	var hostFound bool
+	var (
+		hostFound      bool
+		previousHeader string
+	)
 	for _, header := range signedHeaders {
-		if strings.EqualFold(header, "host") {
-			hostFound = true
+		if header != strings.ToLower(header) {
+			return nil, errors.Join(
+				ErrInvalidArgument,
+				fmt.Errorf("the SignedHeaders parameter contains a header that is not lowercase: %s", header),
+			)
 		}
-		signedHeadersLookup[textproto.CanonicalMIMEHeaderKey(header)] = struct{}{}
+		if header < previousHeader {
+			return nil, errors.Join(
+				ErrInvalidArgument,
+				fmt.Errorf("the SignedHeaders parameter contains headers that are not sorted: %s < %s", header, previousHeader),
+			)
+		}
+		previousHeader, signedHeadersLookup[header] = header, struct{}{}
 	}
 
-	// …
+	if !hostFound {
+		return nil, errors.Join(
+			ErrInvalidArgument,
+			errors.New("the SignedHeaders parameter does not contain the host header"),
+		)
+	}
 
-	for key := range textproto.MIMEHeader(actualHeaders) {
+	for key := range actualHeaders {
 		if strings.EqualFold(key, headerXAmzContentSha256) {
 			continue
 		}
-		if strings.HasPrefix(key, "X-Amz-") {
-			if _, ok := signedHeadersLookup[key]; !ok {
-				// oops
+		if strings.EqualFold(key, headerContentMD5) {
+			if _, ok := signedHeadersLookup[headerContentMD5]; !ok {
+				return nil, errors.Join(
+					ErrInvalidArgument,
+					errors.New("the SignedHeaders parameter does not contain the content-md5 header"),
+				)
+			}
+		}
+		if k := strings.ToLower(key); strings.HasPrefix(k, "x-amz-") {
+			if _, ok := signedHeadersLookup[k]; !ok {
+				return nil, errors.Join(
+					ErrInvalidArgument,
+					fmt.Errorf("the SignedHeaders parameter does not contain the %s header", k),
+				)
 			}
 		}
 	}
 
-	return nil, nil
+	return signedHeaders, nil
 }
 
 func (v4 *V4) parseSignature(rawSignature string) (signatureV4, error) {
@@ -722,7 +748,7 @@ func (v4 *V4) verify(r *http.Request) (requestData, error) {
 
 	rawXAmzContentSHA256 := r.Header.Get(headerXAmzContentSha256)
 	if rawXAmzContentSHA256 == "" {
-		// error?
+		// TODO(amwolff): error?
 	}
 
 	options, err := v4.parseXAmzContentSHA256(rawXAmzContentSHA256)
