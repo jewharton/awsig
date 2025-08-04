@@ -22,6 +22,7 @@ var (
 	ErrSignatureMalformed            = errors.New("signature malformed")
 
 	ErrInvalidArgument              = errors.New("invalid argument")
+	ErrInvalidRequest               = errors.New("invalid request")
 	ErrAuthorizationHeaderMalformed = errors.New("the authorization header that you provided is not valid")
 
 	ErrAuthorizationQueryParametersError = errors.New("the authorization query parameters that you provided are not valid")
@@ -111,6 +112,46 @@ type V4Reader struct {
 	chunkSHA256            hash.Hash
 	chunkPreviousSignature signatureV4
 	chunkExpectedSignature signatureV4
+}
+
+type readerOptions struct {
+	dateTime        string
+	scope           scope
+	parsedOptions   parsedXAmzContentSHA256
+	parsedIntegrity parsedIntegrity
+	secretAccessKey string
+	seedSignature   signatureV4
+}
+
+func newV4Reader(r io.Reader, data readerOptions) *V4Reader {
+	var (
+		ir          *integrityReader
+		chunkSHA256 hash.Hash
+	)
+
+	if !data.parsedOptions.unsigned {
+		chunkSHA256 = sha256.New()
+		ir = newIntegrityReader(io.TeeReader(r, chunkSHA256), data.parsedIntegrity.sumAlgos)
+	} else {
+		ir = newIntegrityReader(r, data.parsedIntegrity.sumAlgos)
+	}
+
+	return &V4Reader{
+		r:                      r,
+		ir:                     ir,
+		unsigned:               data.parsedOptions.unsigned,
+		multipleChunks:         data.parsedOptions.streaming,
+		trailingHeader:         data.parsedOptions.trailer,
+		trailingSumAlgo:        data.parsedIntegrity.trailingSumAlgo,
+		signingAlgo:            data.parsedOptions.signingAlgo,
+		dateTime:               data.dateTime,
+		scope:                  data.scope,
+		secretAccessKey:        data.secretAccessKey,
+		integrity:              data.parsedIntegrity.integrity,
+		decodedContentLength:   data.parsedOptions.decodedContentLength,
+		chunkSHA256:            chunkSHA256,
+		chunkPreviousSignature: data.seedSignature,
+	}
 }
 
 func (r *V4Reader) consumeLF(buf []byte) error {
@@ -425,8 +466,6 @@ func (r *V4Reader) Read(p []byte) (n int, err error) {
 	return n, err
 }
 
-// TODO(amwolff): create a constructor for V4Reader taking readerOptions
-
 type CredentialsProvider interface {
 	Provide(accessKeyID string) (secretAccessKey string, _ error)
 }
@@ -679,28 +718,75 @@ type parsedXAmzContentSHA256 struct {
 	decodedContentLength int
 }
 
-func (v4 *V4) parseXAmzContentSHA256(rawXAmzContentSHA256 string) (parsedXAmzContentSHA256, error) {
+func (v4 *V4) decodedContentLength(contentLength int64, headers http.Header) (int, error) {
+	rawDecodedContentLength := headers.Get("x-amz-decoded-content-length")
+	if rawDecodedContentLength == "" {
+		return 0, errors.Join(
+			ErrInvalidRequest,
+			errors.New("the x-amz-decoded-content-length header is missing"),
+		)
+	}
+
+	decodedContentLength, err := strconv.Atoi(rawDecodedContentLength)
+	if err != nil {
+		return 0, errors.Join(
+			ErrInvalidArgument,
+			fmt.Errorf("the x-amz-decoded-content-length header does not contain a valid integer: %w", err),
+		)
+	}
+
+	if te := headers.Get("transfer-encoding"); contentLength > 0 && te != "identity" {
+		return 0, errors.Join(
+			ErrInvalidArgument,
+			errors.New("the content-length header must have been omitted"),
+		)
+	} else if contentLength < 0 && te == "" {
+		return 0, errors.Join(
+			ErrInvalidArgument,
+			errors.New("the content-length header is missing"),
+		)
+	}
+
+	return decodedContentLength, nil
+}
+
+func (v4 *V4) parseXAmzContentSHA256(rawXAmzContentSHA256 string, contentLength int64, headers http.Header) (parsedXAmzContentSHA256, error) {
 	switch rawXAmzContentSHA256 {
 	case unsignedPayload:
 		return parsedXAmzContentSHA256{
 			unsigned: true,
 		}, nil
 	case streamingUnsignedPayloadTrailer:
+		length, err := v4.decodedContentLength(contentLength, headers)
+		if err != nil {
+			return parsedXAmzContentSHA256{}, err
+		}
 		return parsedXAmzContentSHA256{
-			unsigned:  true,
-			streaming: true,
-			trailer:   true,
+			unsigned:             true,
+			streaming:            true,
+			trailer:              true,
+			decodedContentLength: length,
 		}, nil
 	case streamingAWS4HMACSHA256Payload:
+		length, err := v4.decodedContentLength(contentLength, headers)
+		if err != nil {
+			return parsedXAmzContentSHA256{}, err
+		}
 		return parsedXAmzContentSHA256{
-			streaming:   true,
-			signingAlgo: algorithmHMACSHA256,
+			streaming:            true,
+			signingAlgo:          algorithmHMACSHA256,
+			decodedContentLength: length,
 		}, nil
 	case streamingAWS4HMACSHA256PayloadTrailer:
+		length, err := v4.decodedContentLength(contentLength, headers)
+		if err != nil {
+			return parsedXAmzContentSHA256{}, err
+		}
 		return parsedXAmzContentSHA256{
-			streaming:   true,
-			signingAlgo: algorithmHMACSHA256,
-			trailer:     true,
+			streaming:            true,
+			signingAlgo:          algorithmHMACSHA256,
+			trailer:              true,
+			decodedContentLength: length,
 		}, nil
 	case streamingAWS4ECDSAP256SHA256Payload, streamingAWS4ECDSAP256SHA256PayloadTrailer:
 		return parsedXAmzContentSHA256{}, fmt.Errorf("(streaming) calculation using the AWS4-ECDSA-P256-SHA256 algorithm is not implemented yet: %w", ErrNotImplemented)
@@ -709,21 +795,25 @@ func (v4 *V4) parseXAmzContentSHA256(rawXAmzContentSHA256 string) (parsedXAmzCon
 	return parsedXAmzContentSHA256{}, nil
 }
 
-func (v4 *V4) determineIntegrity(options parsedXAmzContentSHA256, headers http.Header) (checksumAlgorithm, expectedIntegrity, error) {
-	return 0, expectedIntegrity{}, ErrNotImplemented
+type parsedIntegrity struct {
+	sumAlgos        []checksumAlgorithm
+	trailingSumAlgo checksumAlgorithm
+	integrity       expectedIntegrity
 }
 
-type requestData struct { // TODO(amwolff): make this readerOptions
-	options          parsedXAmzContentSHA256
-	integritySumAlgo checksumAlgorithm // TODO(amwolff): there can be multiple integrity algorithms, so this should be a slice (an individual one for the trailer, though)
-	integrity        expectedIntegrity
-	dateTime         string
-	scope            scope
-	secretAccessKey  string
-	seedSignature    signatureV4
+func (v4 *V4) determineIntegrity(rawXAmzContentSHA256 string, options parsedXAmzContentSHA256, headers http.Header) (parsedIntegrity, error) {
+	var ret parsedIntegrity
+
+	// …
+
+	if contentMD5 := headers.Get(headerContentMD5); contentMD5 != "" {
+		ret.integrity.add(algorithmMD5, contentMD5)
+	}
+
+	return ret, nil
 }
 
-func (v4 *V4) verify(r *http.Request) (requestData, error) {
+func (v4 *V4) verify(r *http.Request) (readerOptions, error) {
 	rawDate := r.Header.Get("x-amz-date")
 	if rawDate == "" {
 		rawDate = r.Header.Get("date")
@@ -731,41 +821,44 @@ func (v4 *V4) verify(r *http.Request) (requestData, error) {
 
 	parsedDateTime, err := time.Parse(timeFormatISO8601, rawDate)
 	if err != nil {
-		return requestData{}, errors.Join(
+		return readerOptions{}, errors.Join(
 			ErrInvalidArgument,
 			fmt.Errorf("the x-amz-date or date header does not contain a valid date: %w", err),
 		)
 	}
 
 	if skew := v4.now().Sub(parsedDateTime); skew < -15*time.Minute || skew > 15*time.Minute {
-		return requestData{}, ErrRequestTimeTooSkewed
+		return readerOptions{}, ErrRequestTimeTooSkewed
 	}
 
 	authorization, err := v4.parseAuthorization(r.Header.Get("authorization"), parsedDateTime, r.Header)
 	if err != nil {
-		return requestData{}, err
+		return readerOptions{}, err
 	}
 
 	rawXAmzContentSHA256 := r.Header.Get(headerXAmzContentSha256)
 	if rawXAmzContentSHA256 == "" {
-		// TODO(amwolff): error?
+		return readerOptions{}, errors.Join(
+			ErrInvalidRequest,
+			errors.New("the x-amz-content-sha256 header is missing"),
+		)
 	}
 
-	options, err := v4.parseXAmzContentSHA256(rawXAmzContentSHA256)
+	options, err := v4.parseXAmzContentSHA256(rawXAmzContentSHA256, r.ContentLength, r.Header)
 	if err != nil {
-		return requestData{}, err
+		return readerOptions{}, err
 	}
 
-	integritySumAlgo, integrity, err := v4.determineIntegrity(options, r.Header)
+	integrity, err := v4.determineIntegrity(rawXAmzContentSHA256, options, r.Header)
 	if err != nil {
-		return requestData{}, err
+		return readerOptions{}, err
 	}
 
 	// TODO(amwolff): build canonical request
 
 	secretAccessKey, err := v4.provider.Provide(authorization.credential.accessKeyID)
 	if err != nil {
-		return requestData{}, err
+		return readerOptions{}, err
 	}
 
 	signature := calculateSignature(signatureData{
@@ -778,22 +871,18 @@ func (v4 *V4) verify(r *http.Request) (requestData, error) {
 	}, secretAccessKey)
 
 	if !signature.compare(authorization.signature) {
-		return requestData{}, ErrSignatureDoesNotMatch
+		return readerOptions{}, ErrSignatureDoesNotMatch
 	}
 
-	return requestData{
-		options:          options,
-		integritySumAlgo: integritySumAlgo,
-		integrity:        integrity,
-		dateTime:         rawDate,
-		scope:            authorization.credential.scope,
-		secretAccessKey:  secretAccessKey,
-		seedSignature:    signature,
+	return readerOptions{
+		parsedOptions:   options,
+		parsedIntegrity: integrity,
+		seedSignature:   signature,
 	}, nil
 }
 
-func (v4 *V4) verifyPresigned(r *http.Request) (requestData, error) {
-	return requestData{}, nil
+func (v4 *V4) verifyPresigned(r *http.Request) (readerOptions, error) {
+	return readerOptions{}, nil
 }
 
 func (v4 *V4) Verify(r *http.Request) (*V4Reader, error) {
@@ -802,69 +891,13 @@ func (v4 *V4) Verify(r *http.Request) (*V4Reader, error) {
 		if err != nil {
 			return nil, err
 		}
-
-		var (
-			ir          *integrityReader
-			chunkSHA256 hash.Hash
-		)
-
-		if !data.options.unsigned {
-			chunkSHA256 = sha256.New()
-			ir = newIntegrityReader(io.TeeReader(r.Body, chunkSHA256))
-		} else {
-			ir = newIntegrityReader(r.Body)
-		}
-
-		return &V4Reader{
-			r:                      r.Body,
-			ir:                     ir,
-			unsigned:               data.options.unsigned,
-			multipleChunks:         data.options.streaming,
-			trailingHeader:         data.options.trailer,
-			trailingSumAlgo:        data.integritySumAlgo,
-			signingAlgo:            data.options.signingAlgo,
-			dateTime:               data.dateTime,
-			scope:                  data.scope,
-			secretAccessKey:        data.secretAccessKey,
-			integrity:              data.integrity,
-			decodedContentLength:   data.options.decodedContentLength,
-			chunkSHA256:            chunkSHA256,
-			chunkPreviousSignature: data.seedSignature,
-		}, nil
+		return newV4Reader(r.Body, data), nil
 	} else if r.URL.Query().Has(queryXAmzAlgorithm) {
 		data, err := v4.verifyPresigned(r)
 		if err != nil {
 			return nil, err
 		}
-
-		var (
-			ir          *integrityReader
-			chunkSHA256 hash.Hash
-		)
-
-		if !data.options.unsigned { // TODO(amwolff): can these options be even used for presigned requests?
-			chunkSHA256 = sha256.New()
-			ir = newIntegrityReader(io.TeeReader(r.Body, chunkSHA256))
-		} else {
-			ir = newIntegrityReader(r.Body)
-		}
-
-		return &V4Reader{
-			r:                      r.Body,
-			ir:                     ir,
-			unsigned:               data.options.unsigned,
-			multipleChunks:         data.options.streaming,
-			trailingHeader:         data.options.trailer,
-			trailingSumAlgo:        data.integritySumAlgo,
-			signingAlgo:            data.options.signingAlgo,
-			dateTime:               data.dateTime,
-			scope:                  data.scope,
-			secretAccessKey:        data.secretAccessKey,
-			integrity:              data.integrity,
-			decodedContentLength:   data.options.decodedContentLength,
-			chunkSHA256:            chunkSHA256,
-			chunkPreviousSignature: data.seedSignature,
-		}, nil
+		return newV4Reader(r.Body, data), nil
 	} else if r.Method == http.MethodPost {
 		return nil, fmt.Errorf("authenticating HTTP POST requests is not implemented yet: %w", ErrNotImplemented)
 	}

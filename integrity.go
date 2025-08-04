@@ -182,7 +182,7 @@ func equalSumsHex(expected string, actual []byte) bool {
 	return expected == hex.EncodeToString(actual)
 }
 
-func newIntegrityReader(r io.Reader, algorithms ...checksumAlgorithm) *integrityReader {
+func newIntegrityReader(r io.Reader, algorithms []checksumAlgorithm) *integrityReader {
 	ir := new(integrityReader)
 
 	var writers []io.Writer
