@@ -802,11 +802,95 @@ type parsedIntegrity struct {
 }
 
 func (v4 *V4) determineIntegrity(rawXAmzContentSHA256 string, options parsedXAmzContentSHA256, headers http.Header) (parsedIntegrity, error) {
+	// thanks, Ermiya Eskandary (https://stackoverflow.com/a/77663532)!
+
 	var ret parsedIntegrity
 
-	// …
+	rawAlgorithm := headers.Get("x-amz-sdk-checksum-algorithm")
+	headerToAlgo := map[string]checksumAlgorithm{
+		"x-amz-checksum-crc32":     algorithmCRC32,
+		"x-amz-checksum-crc32c":    algorithmCRC32C,
+		"x-amz-checksum-crc64nvme": algorithmCRC64NVME,
+		"x-amz-checksum-sha1":      algorithmSHA1,
+		"x-amz-checksum-sha256":    algorithmSHA256,
+	}
+
+	var (
+		specifiedAlgorithm *checksumAlgorithm
+		rawChecksum        string
+	)
+	for h, a := range headerToAlgo {
+		c := headers.Get(h)
+		if specifiedAlgorithm != nil && c != "" {
+			return parsedIntegrity{}, errors.Join(
+				ErrInvalidArgument,
+				errors.New("expecting a single x-amz-checksum- header; multiple checksum types are not allowed"),
+			)
+		}
+		if c != "" {
+			if rawAlgorithm != "" && strings.EqualFold(rawAlgorithm, a.String()) {
+				return parsedIntegrity{}, errors.Join(
+					ErrInvalidArgument,
+					fmt.Errorf("the x-amz-sdk-checksum-algorithm header does not match the %s header", h),
+				)
+			}
+			specifiedAlgorithm, rawChecksum = &a, c
+		}
+	}
+
+	if trailerValue := headers.Get("x-amz-trailer"); trailerValue != "" {
+		if !options.streaming || !options.trailer {
+			return parsedIntegrity{}, errors.Join(
+				ErrInvalidArgument,
+				errors.New("the x-amz-trailer header is only allowed for streaming requests with trailer signatures"),
+			)
+		}
+		if rawAlgorithm != "" && !strings.EqualFold(rawAlgorithm, trailerValue) {
+			return parsedIntegrity{}, errors.Join(
+				ErrInvalidArgument,
+				errors.New("the x-amz-sdk-checksum-algorithm header does not match the x-amz-trailer header"),
+			)
+		}
+
+		if specifiedAlgorithm != nil {
+			return parsedIntegrity{}, errors.Join(
+				ErrInvalidArgument,
+				errors.New("the x-amz-checksum- header is not allowed when the x-amz-trailer header is present"),
+			)
+		}
+
+		a, ok := headerToAlgo[trailerValue]
+		if !ok {
+			return parsedIntegrity{}, errors.Join(
+				ErrInvalidArgument,
+				errors.New("the x-amz-trailer header does not contain currently supported values"),
+			)
+		}
+
+		specifiedAlgorithm = &a
+	} else if options.trailer {
+		return parsedIntegrity{}, errors.Join(
+			ErrInvalidArgument,
+			errors.New("the x-amz-trailer header is missing"),
+		)
+	}
+
+	if specifiedAlgorithm != nil {
+		ret.sumAlgos = append(ret.sumAlgos, *specifiedAlgorithm)
+		if !options.trailer {
+			ret.integrity.add(*specifiedAlgorithm, rawChecksum)
+		}
+	} else {
+		ret.sumAlgos = append(ret.sumAlgos, algorithmCRC64NVME)
+	}
+
+	if !options.unsigned && !options.streaming {
+		ret.sumAlgos = append(ret.sumAlgos, algorithmHashedPayload)
+		ret.integrity.add(algorithmHashedPayload, rawXAmzContentSHA256)
+	}
 
 	if contentMD5 := headers.Get(headerContentMD5); contentMD5 != "" {
+		ret.sumAlgos = append(ret.sumAlgos, algorithmMD5)
 		ret.integrity.add(algorithmMD5, contentMD5)
 	}
 
