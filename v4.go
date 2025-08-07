@@ -839,23 +839,16 @@ func (v4 *V4) determineIntegrity(rawXAmzContentSHA256 string, options parsedXAmz
 	}
 
 	if trailerValue := headers.Get("x-amz-trailer"); trailerValue != "" {
-		if !options.streaming || !options.trailer {
-			return parsedIntegrity{}, errors.Join(
-				ErrInvalidArgument,
-				errors.New("the x-amz-trailer header is only allowed for streaming requests with trailer signatures"),
-			)
-		}
-		if rawAlgorithm != "" && !strings.EqualFold(rawAlgorithm, trailerValue) {
-			return parsedIntegrity{}, errors.Join(
-				ErrInvalidArgument,
-				errors.New("the x-amz-sdk-checksum-algorithm header does not match the x-amz-trailer header"),
-			)
-		}
-
 		if specifiedAlgorithm != nil {
 			return parsedIntegrity{}, errors.Join(
 				ErrInvalidArgument,
 				errors.New("the x-amz-checksum- header is not allowed when the x-amz-trailer header is present"),
+			)
+		}
+		if !options.streaming || !options.trailer {
+			return parsedIntegrity{}, errors.Join(
+				ErrInvalidArgument,
+				errors.New("the x-amz-trailer header is only allowed for streaming requests with trailer signatures"),
 			)
 		}
 
@@ -864,6 +857,13 @@ func (v4 *V4) determineIntegrity(rawXAmzContentSHA256 string, options parsedXAmz
 			return parsedIntegrity{}, errors.Join(
 				ErrInvalidArgument,
 				errors.New("the x-amz-trailer header does not contain currently supported values"),
+			)
+		}
+
+		if rawAlgorithm != "" && !strings.EqualFold(rawAlgorithm, a.String()) {
+			return parsedIntegrity{}, errors.Join(
+				ErrInvalidArgument,
+				errors.New("the x-amz-sdk-checksum-algorithm header does not match the x-amz-trailer header"),
 			)
 		}
 
