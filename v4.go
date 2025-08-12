@@ -1024,7 +1024,7 @@ func (v4 *V4) verify(r *http.Request) (readerOptions, error) {
 }
 
 func (v4 *V4) verifyPresigned(r *http.Request) (readerOptions, error) {
-	return readerOptions{}, nil
+	return readerOptions{}, fmt.Errorf("verifying presigned requests is not implemented yet: %w", ErrNotImplemented)
 }
 
 func (v4 *V4) Verify(r *http.Request) (*V4Reader, error) {
