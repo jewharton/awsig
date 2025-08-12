@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -897,6 +899,62 @@ func (v4 *V4) determineIntegrity(rawXAmzContentSHA256 string, options parsedXAmz
 	return ret, nil
 }
 
+func (v4 *V4) canonicalRequestHash(r *http.Request, signedHeaders []string, hashedPayload string) []byte {
+	b := newHashBuilder(sha256.New)
+
+	// http verb
+	b.WriteString(r.Method)
+	b.WriteByte(lf)
+	// canonical uri
+	b.WriteString(uriEncode(r.URL.Path, true))
+	b.WriteByte(lf)
+	// canonical query string
+	query := r.URL.Query() // TODO(amwolff): perhaps we could avoid re-parsing the query
+	queryParams := slices.Collect(maps.Keys(query))
+	slices.Sort(queryParams)
+	for _, p := range queryParams {
+		for i, v := range query[p] {
+			if i > 0 {
+				b.WriteByte('&')
+			}
+			b.WriteString(uriEncode(p, false))
+			b.WriteByte('=')
+			b.WriteString(uriEncode(v, false))
+		}
+	}
+	b.WriteByte(lf)
+	// canonical headers
+	//
+	// here's a brainteaser: are they sorted based on lowercased names
+	// or names that were sent over the wire?
+	headerNames := slices.Collect(maps.Keys(r.Header))
+	slices.Sort(headerNames)
+	for _, name := range headerNames {
+		for _, v := range r.Header.Values(name) {
+			b.WriteString(strings.ToLower(name))
+			b.WriteByte(':')
+			b.WriteString(strings.TrimSpace(v))
+			b.WriteByte(lf)
+		}
+	}
+	b.WriteByte(lf)
+	// signed headers
+	//
+	// NOTE: parseSignedHeaders already ensured that signedHeaders are
+	// lowercase and sorted.
+	for i, h := range signedHeaders {
+		if i > 0 {
+			b.WriteByte(';')
+		}
+		b.WriteString(h)
+	}
+	b.WriteByte(lf)
+	// hashed payload
+	b.WriteString(hashedPayload)
+
+	return b.Sum()
+}
+
 func (v4 *V4) verify(r *http.Request) (readerOptions, error) {
 	rawDate := r.Header.Get("x-amz-date")
 	if rawDate == "" {
@@ -938,12 +996,12 @@ func (v4 *V4) verify(r *http.Request) (readerOptions, error) {
 		return readerOptions{}, err
 	}
 
-	// TODO(amwolff): build canonical request
-
 	secretAccessKey, err := v4.provider.Provide(authorization.credential.accessKeyID)
 	if err != nil {
 		return readerOptions{}, err
 	}
+
+	canonicalRequestHash := v4.canonicalRequestHash(r, authorization.signedHeaders, rawXAmzContentSHA256)
 
 	signature := calculateSignature(signatureData{
 		algorithm:       authorization.signingAlgo,
@@ -951,7 +1009,7 @@ func (v4 *V4) verify(r *http.Request) (readerOptions, error) {
 		dateTime:        rawDate,
 		scope:           authorization.credential.scope,
 		previous:        nil,
-		// TODO(amwolff): digest is hex(sha256hash(canonical request))
+		digest:          canonicalRequestHash,
 	}, secretAccessKey)
 
 	if !signature.compare(authorization.signature) {

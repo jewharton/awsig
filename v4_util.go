@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
-	"strings"
+	"hash"
 )
 
 const (
@@ -118,7 +118,9 @@ func calculateSignature(data signatureData, secretAccessKey string) signatureV4 
 		panic("not implemented")
 	}
 
-	b := new(strings.Builder)
+	key := signingKeyHMACSHA256(secretAccessKey, data.scope.date, data.scope.region, data.scope.service)
+
+	b := newHashBuilder(func() hash.Hash { return hmac.New(sha256.New, key) })
 
 	b.WriteString(signingAlgorithmPrefix)
 	b.WriteString(data.algorithm.String())
@@ -142,7 +144,5 @@ func calculateSignature(data signatureData, secretAccessKey string) signatureV4 
 
 	hex.NewEncoder(b).Write(data.digest)
 
-	key := signingKeyHMACSHA256(secretAccessKey, data.scope.date, data.scope.region, data.scope.service)
-
-	return hmacSHA256(key, b.String())
+	return b.Sum()
 }
