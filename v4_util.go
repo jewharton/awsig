@@ -125,21 +125,21 @@ func calculateSignature(data signatureData, secretAccessKey string) signatureV4 
 	b.WriteString(signingAlgorithmPrefix)
 	b.WriteString(data.algorithm.String())
 	b.WriteString(data.algorithmSuffix.String())
-	b.WriteByte('\n')
+	b.WriteByte(lf)
 	b.WriteString(data.dateTime)
-	b.WriteByte('\n')
+	b.WriteByte(lf)
 	b.WriteString(data.scope.String())
-	b.WriteByte('\n')
+	b.WriteByte(lf)
 
 	switch data.algorithmSuffix {
 	case algorithmSuffixPayload:
 		b.WriteString(data.previous.String())
-		b.WriteByte('\n')
+		b.WriteByte(lf)
 		b.WriteString("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
-		b.WriteByte('\n')
+		b.WriteByte(lf)
 	case algorithmSuffixTrailer:
 		b.WriteString(data.previous.String())
-		b.WriteByte('\n')
+		b.WriteByte(lf)
 	}
 
 	hex.NewEncoder(b).Write(data.digest)

@@ -51,18 +51,27 @@ var (
 )
 
 const (
-	headerDate     = "date"
-	headerXAmzDate = "x-amz-date"
+	xAmzHeaderPrefix = "x-amz-"
 
-	headerAuthorization = "authorization"
+	headerAuthorization            = "authorization"
+	headerContentMD5               = "content-md5"
+	headerDate                     = "date"
+	headerTransferEncoding         = "transfer-encoding"
+	headerXAmzChecksumCrc32        = xAmzHeaderPrefix + "checksum-crc32"
+	headerXAmzChecksumCrc32c       = xAmzHeaderPrefix + "checksum-crc32c"
+	headerXAmzChecksumCrc64nvme    = xAmzHeaderPrefix + "checksum-crc64nvme"
+	headerXAmzChecksumSha1         = xAmzHeaderPrefix + "checksum-sha1"
+	headerXAmzChecksumSha256       = xAmzHeaderPrefix + "checksum-sha256"
+	headerXAmzContentSha256        = xAmzHeaderPrefix + "content-sha256"
+	headerXAmzDate                 = xAmzHeaderPrefix + "date"
+	headerXAmzDecodedContentLength = xAmzHeaderPrefix + "decoded-content-length"
+	headerXAmzSdkChecksumAlgorithm = xAmzHeaderPrefix + "sdk-checksum-algorithm"
+	headerXAmzTrailer              = xAmzHeaderPrefix + "trailer"
 
 	authorizationHeaderCredentialPrefix     = "Credential="
 	authorizationHeaderSignedHeadersPrefix  = "SignedHeaders="
 	authorizationHeaderSignaturePrefix      = "Signature="
 	authorizationHeaderCredentialTerminator = "aws4_request"
-
-	headerXAmzContentSha256 = "x-amz-content-sha256"
-	headerContentMD5        = "content-md5"
 
 	unsignedPayload                            = "UNSIGNED-PAYLOAD"
 	streamingUnsignedPayloadTrailer            = "STREAMING-UNSIGNED-PAYLOAD-TRAILER"
@@ -626,7 +635,7 @@ func (v4 *V4) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.Hea
 				)
 			}
 		}
-		if k := strings.ToLower(key); strings.HasPrefix(k, "x-amz-") {
+		if k := strings.ToLower(key); strings.HasPrefix(k, xAmzHeaderPrefix) {
 			if _, ok := signedHeadersLookup[k]; !ok {
 				return nil, errors.Join(
 					ErrInvalidArgument,
@@ -721,11 +730,11 @@ type parsedXAmzContentSHA256 struct {
 }
 
 func (v4 *V4) decodedContentLength(contentLength int64, headers http.Header) (int, error) {
-	rawDecodedContentLength := headers.Get("x-amz-decoded-content-length")
+	rawDecodedContentLength := headers.Get(headerXAmzDecodedContentLength)
 	if rawDecodedContentLength == "" {
 		return 0, errors.Join(
 			ErrInvalidRequest,
-			errors.New("the x-amz-decoded-content-length header is missing"),
+			fmt.Errorf("the %s header is missing", headerXAmzDecodedContentLength),
 		)
 	}
 
@@ -733,11 +742,11 @@ func (v4 *V4) decodedContentLength(contentLength int64, headers http.Header) (in
 	if err != nil {
 		return 0, errors.Join(
 			ErrInvalidArgument,
-			fmt.Errorf("the x-amz-decoded-content-length header does not contain a valid integer: %w", err),
+			fmt.Errorf("the %s header does not contain a valid integer: %w", headerXAmzDecodedContentLength, err),
 		)
 	}
 
-	if te := headers.Get("transfer-encoding"); contentLength > 0 && te != "identity" {
+	if te := headers.Get(headerTransferEncoding); contentLength > 0 && te != "identity" {
 		return 0, errors.Join(
 			ErrInvalidArgument,
 			errors.New("the content-length header must have been omitted"),
@@ -808,13 +817,13 @@ func (v4 *V4) determineIntegrity(rawXAmzContentSHA256 string, options parsedXAmz
 
 	var ret parsedIntegrity
 
-	rawAlgorithm := headers.Get("x-amz-sdk-checksum-algorithm")
+	rawAlgorithm := headers.Get(headerXAmzSdkChecksumAlgorithm)
 	headerToAlgo := map[string]checksumAlgorithm{
-		"x-amz-checksum-crc32":     algorithmCRC32,
-		"x-amz-checksum-crc32c":    algorithmCRC32C,
-		"x-amz-checksum-crc64nvme": algorithmCRC64NVME,
-		"x-amz-checksum-sha1":      algorithmSHA1,
-		"x-amz-checksum-sha256":    algorithmSHA256,
+		headerXAmzChecksumCrc32:     algorithmCRC32,
+		headerXAmzChecksumCrc32c:    algorithmCRC32C,
+		headerXAmzChecksumCrc64nvme: algorithmCRC64NVME,
+		headerXAmzChecksumSha1:      algorithmSHA1,
+		headerXAmzChecksumSha256:    algorithmSHA256,
 	}
 
 	var (
@@ -833,24 +842,24 @@ func (v4 *V4) determineIntegrity(rawXAmzContentSHA256 string, options parsedXAmz
 			if rawAlgorithm != "" && strings.EqualFold(rawAlgorithm, a.String()) {
 				return parsedIntegrity{}, errors.Join(
 					ErrInvalidArgument,
-					fmt.Errorf("the x-amz-sdk-checksum-algorithm header does not match the %s header", h),
+					fmt.Errorf("the %s header does not match the %s header", headerXAmzSdkChecksumAlgorithm, h),
 				)
 			}
 			specifiedAlgorithm, rawChecksum = &a, c
 		}
 	}
 
-	if trailerValue := headers.Get("x-amz-trailer"); trailerValue != "" {
+	if trailerValue := headers.Get(headerXAmzTrailer); trailerValue != "" {
 		if specifiedAlgorithm != nil {
 			return parsedIntegrity{}, errors.Join(
 				ErrInvalidArgument,
-				errors.New("the x-amz-checksum- header is not allowed when the x-amz-trailer header is present"),
+				fmt.Errorf("the x-amz-checksum- header is not allowed when the %s header is present", headerXAmzTrailer),
 			)
 		}
 		if !options.streaming || !options.trailer {
 			return parsedIntegrity{}, errors.Join(
 				ErrInvalidArgument,
-				errors.New("the x-amz-trailer header is only allowed for streaming requests with trailer signatures"),
+				fmt.Errorf("the %s header is only allowed for streaming requests with trailer signatures", headerXAmzTrailer),
 			)
 		}
 
@@ -858,14 +867,14 @@ func (v4 *V4) determineIntegrity(rawXAmzContentSHA256 string, options parsedXAmz
 		if !ok {
 			return parsedIntegrity{}, errors.Join(
 				ErrInvalidArgument,
-				errors.New("the x-amz-trailer header does not contain currently supported values"),
+				fmt.Errorf("the %s header does not contain currently supported values", headerXAmzTrailer),
 			)
 		}
 
 		if rawAlgorithm != "" && !strings.EqualFold(rawAlgorithm, a.String()) {
 			return parsedIntegrity{}, errors.Join(
 				ErrInvalidArgument,
-				errors.New("the x-amz-sdk-checksum-algorithm header does not match the x-amz-trailer header"),
+				fmt.Errorf("the %s header does not match the %s header", headerXAmzSdkChecksumAlgorithm, headerXAmzTrailer),
 			)
 		}
 
@@ -873,7 +882,7 @@ func (v4 *V4) determineIntegrity(rawXAmzContentSHA256 string, options parsedXAmz
 	} else if options.trailer {
 		return parsedIntegrity{}, errors.Join(
 			ErrInvalidArgument,
-			errors.New("the x-amz-trailer header is missing"),
+			fmt.Errorf("the %s header is missing", headerXAmzTrailer),
 		)
 	}
 
@@ -909,7 +918,7 @@ func (v4 *V4) canonicalRequestHash(r *http.Request, signedHeaders []string, hash
 	b.WriteString(uriEncode(r.URL.Path, true))
 	b.WriteByte(lf)
 	// canonical query string
-	query := r.URL.Query() // TODO(amwolff): perhaps we could avoid re-parsing the query
+	query := r.URL.Query()
 	queryParams := slices.Collect(maps.Keys(query))
 	slices.Sort(queryParams)
 	for _, p := range queryParams {
@@ -956,16 +965,16 @@ func (v4 *V4) canonicalRequestHash(r *http.Request, signedHeaders []string, hash
 }
 
 func (v4 *V4) verify(r *http.Request) (readerOptions, error) {
-	rawDate := r.Header.Get("x-amz-date")
+	rawDate := r.Header.Get(headerXAmzDate)
 	if rawDate == "" {
-		rawDate = r.Header.Get("date")
+		rawDate = r.Header.Get(headerDate)
 	}
 
 	parsedDateTime, err := time.Parse(timeFormatISO8601, rawDate)
 	if err != nil {
 		return readerOptions{}, errors.Join(
 			ErrInvalidArgument,
-			fmt.Errorf("the x-amz-date or date header does not contain a valid date: %w", err),
+			fmt.Errorf("the %s or %s header does not contain a valid date: %w", headerXAmzDate, headerDate, err),
 		)
 	}
 
@@ -973,7 +982,7 @@ func (v4 *V4) verify(r *http.Request) (readerOptions, error) {
 		return readerOptions{}, ErrRequestTimeTooSkewed
 	}
 
-	authorization, err := v4.parseAuthorization(r.Header.Get("authorization"), parsedDateTime, r.Header)
+	authorization, err := v4.parseAuthorization(r.Header.Get(headerAuthorization), parsedDateTime, r.Header)
 	if err != nil {
 		return readerOptions{}, err
 	}
@@ -982,7 +991,7 @@ func (v4 *V4) verify(r *http.Request) (readerOptions, error) {
 	if rawXAmzContentSHA256 == "" {
 		return readerOptions{}, errors.Join(
 			ErrInvalidRequest,
-			errors.New("the x-amz-content-sha256 header is missing"),
+			fmt.Errorf("the %s header is missing", headerXAmzContentSha256),
 		)
 	}
 
@@ -1017,8 +1026,11 @@ func (v4 *V4) verify(r *http.Request) (readerOptions, error) {
 	}
 
 	return readerOptions{
+		dateTime:        rawDate,
+		scope:           authorization.credential.scope,
 		parsedOptions:   options,
 		parsedIntegrity: integrity,
+		secretAccessKey: secretAccessKey,
 		seedSignature:   signature,
 	}, nil
 }
