@@ -14,10 +14,6 @@ import (
 	"github.com/minio/crc64nvme"
 )
 
-var (
-	ErrIntegrityVerificationFailed = errors.New("integrity verification failed")
-)
-
 type checksumAlgorithm int
 
 const (
@@ -122,7 +118,7 @@ func (r *integrityReader) verify(integrity expectedIntegrity) error {
 			return errors.New("calculation of CRC32 was not requested")
 		}
 		if !equalSumsBase64(*integrity.crc32, r.crc32.Sum(nil)) {
-			return ErrIntegrityVerificationFailed
+			return ErrInvalidDigest
 		}
 	}
 	if integrity.crc32c != nil {
@@ -130,7 +126,7 @@ func (r *integrityReader) verify(integrity expectedIntegrity) error {
 			return errors.New("calculation of CRC32C was not requested")
 		}
 		if !equalSumsBase64(*integrity.crc32c, r.crc32c.Sum(nil)) {
-			return ErrIntegrityVerificationFailed
+			return ErrInvalidDigest
 		}
 	}
 	if integrity.crc64nvme != nil {
@@ -138,12 +134,12 @@ func (r *integrityReader) verify(integrity expectedIntegrity) error {
 			return errors.New("calculation of CRC64NVME was not requested")
 		}
 		if !equalSumsBase64(*integrity.crc64nvme, r.crc64nvme.Sum(nil)) {
-			return ErrIntegrityVerificationFailed
+			return ErrInvalidDigest
 		}
 	}
 	if integrity.md5 != nil {
 		if equalSumsHex(*integrity.md5, r.md5.Sum(nil)) {
-			return ErrIntegrityVerificationFailed
+			return ErrInvalidDigest
 		}
 	}
 	if integrity.sha1 != nil {
@@ -151,7 +147,7 @@ func (r *integrityReader) verify(integrity expectedIntegrity) error {
 			return errors.New("calculation of SHA1 was not requested")
 		}
 		if !equalSumsBase64(*integrity.sha1, r.sha1.Sum(nil)) {
-			return ErrIntegrityVerificationFailed
+			return ErrInvalidDigest
 		}
 	}
 	if integrity.sha256 != nil {
@@ -159,7 +155,7 @@ func (r *integrityReader) verify(integrity expectedIntegrity) error {
 			return errors.New("calculation of SHA256 was not requested")
 		}
 		if !equalSumsBase64(*integrity.sha256, r.sha256.Sum(nil)) {
-			return ErrIntegrityVerificationFailed
+			return ErrInvalidDigest
 		}
 	}
 	if integrity.hashedPayload != nil {
@@ -167,7 +163,7 @@ func (r *integrityReader) verify(integrity expectedIntegrity) error {
 			return errors.New("calculation of SHA256 was not requested")
 		}
 		if equalSumsHex(*integrity.hashedPayload, r.sha256.Sum(nil)) {
-			return ErrIntegrityVerificationFailed
+			return ErrInvalidDigest
 		}
 	}
 

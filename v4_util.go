@@ -66,18 +66,18 @@ type signatureV4 []byte
 
 func newSignatureV4FromEncoded(b []byte) (signatureV4, error) {
 	if len(b) != signatureV4EncodedLength {
-		return nil, ErrSignatureMalformed
+		return nil, ErrInvalidSignature
 	}
 
 	s := make(signatureV4, signatureV4DecodedLength)
 
 	n, err := hex.Decode(s, b)
 	if err != nil {
-		return nil, ErrSignatureMalformed
+		return nil, ErrInvalidSignature
 	}
 
 	if n != signatureV4DecodedLength {
-		return nil, ErrSignatureMalformed
+		return nil, ErrInvalidSignature
 	}
 
 	return s, nil
