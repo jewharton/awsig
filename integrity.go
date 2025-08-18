@@ -138,7 +138,7 @@ func (r *integrityReader) verify(integrity expectedIntegrity) error {
 		}
 	}
 	if integrity.md5 != nil {
-		if equalSumsHex(*integrity.md5, r.md5.Sum(nil)) {
+		if !equalSumsHex(*integrity.md5, r.md5.Sum(nil)) {
 			return ErrInvalidDigest
 		}
 	}
@@ -162,7 +162,7 @@ func (r *integrityReader) verify(integrity expectedIntegrity) error {
 		if r.sha256 == nil {
 			return errors.New("calculation of SHA256 was not requested")
 		}
-		if equalSumsHex(*integrity.hashedPayload, r.sha256.Sum(nil)) {
+		if !equalSumsHex(*integrity.hashedPayload, r.sha256.Sum(nil)) {
 			return ErrInvalidDigest
 		}
 	}
