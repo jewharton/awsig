@@ -79,7 +79,7 @@ func newHashBuilder(h func() hash.Hash) *hashBuilder {
 
 func uriEncode(value string, path bool) string {
 	encoded := url.QueryEscape(value)
-	oldnews := []string{"+", "%20", "*", "%2A", "%7E", "~"}
+	oldnews := []string{"+", "%20"}
 
 	if path {
 		oldnews = append(oldnews, "%2F", "/")
