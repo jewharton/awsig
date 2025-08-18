@@ -2,9 +2,9 @@ package awsig
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
-	"fmt"
 	"hash"
 	"io"
 	"maps"
@@ -16,38 +16,25 @@ import (
 )
 
 var (
-	ErrNotImplemented = errors.New("not implemented")
-
-	ErrDecodedContentLengthExceeded  = errors.New("decoded content length exceeded")
-	ErrDecodedContentLengthIncorrect = errors.New("decoded content length incorrect")
-	ErrChunkMalformed                = errors.New("chunk malformed") // TODO(amwolff): this is likely incorrect
-	ErrSignatureMalformed            = errors.New("signature malformed")
-
-	ErrInvalidArgument              = errors.New("invalid argument")
-	ErrInvalidRequest               = errors.New("invalid request")
 	ErrAuthorizationHeaderMalformed = errors.New("the authorization header that you provided is not valid")
+	ErrEntityTooLarge               = errors.New("your proposed upload exceeds the maximum allowed object size")
+	ErrEntityTooSmall               = errors.New("your proposed upload is smaller than the minimum allowed object size")
+	ErrIncompleteBody               = errors.New("you did not provide the number of bytes specified by the Content-Length HTTP header")
+	ErrInvalidArgument              = errors.New("invalid argument")
+	ErrInvalidDigest                = errors.New("the Content-MD5 or checksum value that you specified is not valid")
+	ErrInvalidRequest               = errors.New("invalid request")
+	ErrInvalidSignature             = errors.New("the request signature that the server calculated does not match the signature that you provided")
+	ErrMissingAuthenticationToken   = errors.New("the request was not signed")
+	ErrMissingContentLength         = errors.New("you must provide the Content-Length HTTP header")
+	ErrMissingSecurityHeader        = errors.New("your request is missing a required header")
+	ErrRequestTimeTooSkewed         = errors.New("the difference between the request time and the server's time is too large")
+	ErrSignatureDoesNotMatch        = errors.New("the request signature that the server calculated does not match the signature that you provided")
+	ErrUnsupportedSignature         = errors.New("the provided request is signed with an unsupported STS Token version or the signature version is not supported")
 
-	ErrAuthorizationQueryParametersError = errors.New("the authorization query parameters that you provided are not valid")
-	ErrAccessDenied                      = errors.New("access denied")
-	ErrAccountProblem                    = errors.New("there is a problem with your AWS account that prevents the operation from completing successfully")
-	ErrAllAccessDisabled                 = errors.New("all access to this Amazon S3 resource has been disabled")
-	ErrCredentialsNotSupported           = errors.New("this request does not support credentials")
-	ErrCrossLocationLoggingProhibited    = errors.New("cross-region logging is not allowed")
-	ErrExpiredToken                      = errors.New("the provided token has expired")
-	ErrInvalidAccessKeyID                = errors.New("the AWS access key ID that you provided does not exist in our records")
-	ErrInvalidObjectState                = errors.New("the operation is not valid for the current state of the object")
-	ErrInvalidSecurity                   = errors.New("the provided security credentials are not valid")
-	ErrInvalidSignature                  = errors.New("the request signature that the server calculated does not match the signature that you provided")
-	ErrInvalidToken                      = errors.New("the provided token is malformed or otherwise not valid")
-	ErrMissingAuthenticationToken        = errors.New("the request was not signed")
-	ErrMissingSecurityElement            = errors.New("the SOAP 1.1 request is missing a security element")
-	ErrMissingSecurityHeader             = errors.New("your request is missing a required header")
-	ErrNotSignedUp                       = errors.New("your account is not signed up for the Amazon S3 service")
-	ErrRequestTimeTooSkewed              = errors.New("the difference between the request time and the server's time is too large")
-	ErrSignatureDoesNotMatch             = errors.New("the request signature that the server calculated does not match the signature that you provided")
-	ErrUnauthorizedAccess                = errors.New("unauthorized access")
-	ErrUnexpectedIPError                 = errors.New("this request was rejected because the IP was unexpected")
-	ErrUnsupportedSignature              = errors.New("the provided request is signed with an unsupported STS Token version or the signature version is not supported")
+	ErrAccessDenied       = errors.New("access denied")
+	ErrInvalidAccessKeyID = errors.New("the AWS access key ID that you provided does not exist in our records")
+
+	ErrNotImplemented = errors.New("not implemented")
 )
 
 const (
@@ -176,7 +163,7 @@ func (r *V4Reader) consumeLF(buf []byte) error {
 	}
 
 	if buf[0] != lf {
-		return ErrChunkMalformed
+		return ErrIncompleteBody
 	}
 
 	return nil
@@ -193,7 +180,7 @@ func (r *V4Reader) consumeCRLF(buf []byte) error {
 	}
 
 	if buf[0] != cr || buf[1] != lf {
-		return ErrChunkMalformed
+		return ErrIncompleteBody
 	}
 
 	return nil
@@ -217,7 +204,7 @@ func (r *V4Reader) readChunkLength(buf []byte) (int, error) {
 
 		if buf[0] == cr {
 			if !r.unsigned {
-				return 0, ErrChunkMalformed
+				return 0, ErrIncompleteBody
 			}
 
 			if err = r.consumeLF(buf); err != nil {
@@ -228,7 +215,7 @@ func (r *V4Reader) readChunkLength(buf []byte) (int, error) {
 			break
 		} else if buf[0] == ';' {
 			if r.unsigned {
-				return 0, ErrChunkMalformed
+				return 0, ErrIncompleteBody
 			}
 
 			separatorFound = true
@@ -239,19 +226,19 @@ func (r *V4Reader) readChunkLength(buf []byte) (int, error) {
 	}
 
 	if !separatorFound {
-		return 0, ErrChunkMalformed
+		return 0, ErrIncompleteBody
 	}
 
 	length, err := strconv.ParseInt(string(rawLength), 16, 64)
 	if err != nil {
-		return 0, ErrChunkMalformed
+		return 0, ErrIncompleteBody
 	}
 
 	if length != 0 && length < chunkMinLength { // this could be the last chunk
-		return 0, ErrChunkMalformed
+		return 0, ErrEntityTooSmall
 	}
 	if length > chunkMaxLength {
-		return 0, ErrChunkMalformed
+		return 0, ErrEntityTooLarge
 	}
 
 	return int(length), nil
@@ -271,7 +258,7 @@ func (r *V4Reader) readChunkSignature(prefix string, buf []byte) (signatureV4, e
 
 	signature, err := newSignatureV4FromEncoded(rawSignature)
 	if err != nil {
-		return nil, ErrChunkMalformed
+		return nil, ErrInvalidSignature
 	}
 
 	return signature, r.consumeCRLF(buf)
@@ -311,7 +298,7 @@ func (r *V4Reader) readChunkTrailer(buf []byte) error {
 	}
 
 	if !bytes.HasPrefix(buf, []byte(name)) {
-		return ErrChunkMalformed
+		return ErrIncompleteBody
 	}
 
 	r.integrity.add(r.trailingSumAlgo, string(buf[len(name):len(buf)-1]))
@@ -336,7 +323,7 @@ func (r *V4Reader) readChunkTrailer(buf []byte) error {
 			return err
 		}
 	default:
-		return ErrChunkMalformed
+		return ErrIncompleteBody
 	}
 
 	if !r.unsigned {
@@ -378,7 +365,7 @@ func (r *V4Reader) currentChunkSignatureData() signatureData {
 
 func (r *V4Reader) close(buf []byte) error {
 	if r.decodedContentLength != 0 {
-		return ErrDecodedContentLengthIncorrect
+		return ErrIncompleteBody
 	}
 
 	if !r.unsigned {
@@ -399,7 +386,7 @@ func (r *V4Reader) close(buf []byte) error {
 	}
 
 	if err := r.consumeCRLF(buf); !errors.Is(err, io.EOF) {
-		return ErrChunkMalformed
+		return ErrIncompleteBody
 	}
 
 	if err := r.ir.verify(r.integrity); err != nil {
@@ -467,7 +454,7 @@ func (r *V4Reader) Read(p []byte) (n int, err error) {
 	}
 
 	if r.decodedContentLength -= n; r.decodedContentLength < 0 {
-		return n, ErrDecodedContentLengthExceeded
+		return n, ErrIncompleteBody
 	}
 
 	if errors.Is(err, io.EOF) {
@@ -478,7 +465,7 @@ func (r *V4Reader) Read(p []byte) (n int, err error) {
 }
 
 type CredentialsProvider interface {
-	Provide(accessKeyID string) (secretAccessKey string, _ error)
+	Provide(ctx context.Context, accessKeyID string) (secretAccessKey string, _ error)
 }
 
 type V4 struct {
@@ -491,9 +478,9 @@ type V4 struct {
 
 func (v4 *V4) parseSigningAlgo(rawAlgorithm string) (signingAlgorithm, error) {
 	if !strings.HasPrefix(rawAlgorithm, authorizationHeaderSignaturePrefix) {
-		return 0, errors.Join(
+		return 0, nestError(
 			ErrAuthorizationHeaderMalformed,
-			errors.New("the Algorithm parameter is missing"),
+			"the Algorithm parameter is missing",
 		)
 	}
 	rawAlgorithm = rawAlgorithm[len(authorizationHeaderSignaturePrefix):]
@@ -502,14 +489,14 @@ func (v4 *V4) parseSigningAlgo(rawAlgorithm string) (signingAlgorithm, error) {
 	case algorithmHMACSHA256.String():
 		return algorithmHMACSHA256, nil
 	case algorithmECDSAP256SHA256.String():
-		return 0, errors.Join(
+		return 0, nestError(
 			ErrNotImplemented,
-			errors.New("calculation using the AWS4-ECDSA-P256-SHA256 algorithm is not implemented yet"),
+			"calculation using the AWS4-ECDSA-P256-SHA256 algorithm is not implemented yet",
 		)
 	default:
-		return 0, errors.Join(
-			ErrInvalidArgument,
-			errors.New("the Authorization header does not contain a valid signing algorithm"),
+		return 0, nestError(
+			ErrUnsupportedSignature,
+			"the Authorization header does not contain a valid signing algorithm",
 		)
 	}
 }
@@ -521,18 +508,18 @@ type parsedCredential struct {
 
 func (v4 *V4) parseCredential(rawCredential string, expectedDate time.Time) (parsedCredential, error) {
 	if !strings.HasPrefix(rawCredential, authorizationHeaderCredentialPrefix) {
-		return parsedCredential{}, errors.Join(
+		return parsedCredential{}, nestError(
 			ErrAuthorizationHeaderMalformed,
-			errors.New("the Credential parameter is missing"),
+			"the Credential parameter is missing",
 		)
 	}
 
 	parts := strings.SplitN(rawCredential[len(authorizationHeaderCredentialPrefix):], "/", 5)
 
 	if len(parts) != 5 {
-		return parsedCredential{}, errors.Join(
-			ErrInvalidArgument,
-			errors.New("the Credential parameter does not contain necessary parts"),
+		return parsedCredential{}, nestError(
+			ErrAuthorizationHeaderMalformed,
+			"the Credential parameter does not contain necessary parts",
 		)
 	}
 
@@ -540,37 +527,37 @@ func (v4 *V4) parseCredential(rawCredential string, expectedDate time.Time) (par
 
 	date, err := time.Parse(timeFormatYYYYMMDD, parts[1])
 	if err != nil {
-		return parsedCredential{}, errors.Join(
-			ErrInvalidArgument,
-			fmt.Errorf("the Credential parameter does not contain a valid date: %w", err),
+		return parsedCredential{}, nestError(
+			ErrAuthorizationHeaderMalformed,
+			"the Credential parameter does not contain a valid date: %w", err,
 		)
 	}
 
 	if date.Year() != expectedDate.Year() || date.Month() != expectedDate.Month() || date.Day() != expectedDate.Day() {
-		return parsedCredential{}, errors.Join(
-			ErrInvalidArgument,
-			errors.New("the Credential parameter does not contain the expected date"),
+		return parsedCredential{}, nestError(
+			ErrAuthorizationHeaderMalformed,
+			"the Credential parameter does not contain the expected date",
 		)
 	}
 
 	if parts[2] != v4.region { // TODO(amwolff): make region validation optional
-		return parsedCredential{}, errors.Join(
-			ErrInvalidArgument,
-			errors.New("the Credential parameter does not contain the expected region"),
+		return parsedCredential{}, nestError(
+			ErrAuthorizationHeaderMalformed,
+			"the Credential parameter does not contain the expected region",
 		)
 	}
 
 	if parts[3] != v4.service {
-		return parsedCredential{}, errors.Join(
-			ErrInvalidArgument,
-			errors.New("the Credential parameter does not contain the expected service"),
+		return parsedCredential{}, nestError(
+			ErrAuthorizationHeaderMalformed,
+			"the Credential parameter does not contain the expected service",
 		)
 	}
 
 	if parts[4] != authorizationHeaderCredentialTerminator {
-		return parsedCredential{}, errors.Join(
-			ErrInvalidArgument,
-			errors.New("the Credential parameter does not contain the expected terminator"),
+		return parsedCredential{}, nestError(
+			ErrAuthorizationHeaderMalformed,
+			"the Credential parameter does not contain the expected terminator",
 		)
 	}
 
@@ -586,9 +573,9 @@ func (v4 *V4) parseCredential(rawCredential string, expectedDate time.Time) (par
 
 func (v4 *V4) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.Header) ([]string, error) {
 	if !strings.HasPrefix(rawSignedHeaders, authorizationHeaderSignedHeadersPrefix) {
-		return nil, errors.Join(
+		return nil, nestError(
 			ErrAuthorizationHeaderMalformed,
-			errors.New("the SignedHeaders parameter is missing"),
+			"the SignedHeaders parameter is missing",
 		)
 	}
 	rawSignedHeaders = rawSignedHeaders[len(authorizationHeaderSignedHeadersPrefix):]
@@ -602,24 +589,24 @@ func (v4 *V4) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.Hea
 	)
 	for _, header := range signedHeaders {
 		if header != strings.ToLower(header) {
-			return nil, errors.Join(
-				ErrInvalidArgument,
-				fmt.Errorf("the SignedHeaders parameter contains a header that is not lowercase: %s", header),
+			return nil, nestError(
+				ErrAuthorizationHeaderMalformed,
+				"the SignedHeaders parameter contains a header that is not lowercase: %s", header,
 			)
 		}
 		if header < previousHeader {
-			return nil, errors.Join(
-				ErrInvalidArgument,
-				fmt.Errorf("the SignedHeaders parameter contains headers that are not sorted: %s < %s", header, previousHeader),
+			return nil, nestError(
+				ErrAuthorizationHeaderMalformed,
+				"the SignedHeaders parameter contains headers that are not sorted: %s < %s", header, previousHeader,
 			)
 		}
 		previousHeader, signedHeadersLookup[header] = header, struct{}{}
 	}
 
 	if !hostFound {
-		return nil, errors.Join(
-			ErrInvalidArgument,
-			errors.New("the SignedHeaders parameter does not contain the host header"),
+		return nil, nestError(
+			ErrMissingSecurityHeader,
+			"the SignedHeaders parameter does not contain the host header",
 		)
 	}
 
@@ -629,17 +616,17 @@ func (v4 *V4) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.Hea
 		}
 		if strings.EqualFold(key, headerContentMD5) {
 			if _, ok := signedHeadersLookup[headerContentMD5]; !ok {
-				return nil, errors.Join(
-					ErrInvalidArgument,
-					errors.New("the SignedHeaders parameter does not contain the content-md5 header"),
+				return nil, nestError(
+					ErrMissingSecurityHeader,
+					"the SignedHeaders parameter does not contain the content-md5 header",
 				)
 			}
 		}
 		if k := strings.ToLower(key); strings.HasPrefix(k, xAmzHeaderPrefix) {
 			if _, ok := signedHeadersLookup[k]; !ok {
-				return nil, errors.Join(
-					ErrInvalidArgument,
-					fmt.Errorf("the SignedHeaders parameter does not contain the %s header", k),
+				return nil, nestError(
+					ErrMissingSecurityHeader,
+					"the SignedHeaders parameter does not contain the %s header", k,
 				)
 			}
 		}
@@ -650,18 +637,18 @@ func (v4 *V4) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.Hea
 
 func (v4 *V4) parseSignature(rawSignature string) (signatureV4, error) {
 	if !strings.HasPrefix(rawSignature, authorizationHeaderSignaturePrefix) {
-		return nil, errors.Join(
+		return nil, nestError(
 			ErrAuthorizationHeaderMalformed,
-			errors.New("the Signature parameter is missing"),
+			"the Signature parameter is missing",
 		)
 	}
 	rawSignature = rawSignature[len(authorizationHeaderSignaturePrefix):]
 
 	signature, err := newSignatureV4FromEncoded([]byte(rawSignature))
 	if err != nil {
-		return nil, errors.Join(
-			ErrInvalidArgument,
-			fmt.Errorf("the Signature parameter does not contain a valid signature: %w", err),
+		return nil, nestError(
+			ErrInvalidSignature,
+			"the Signature parameter does not contain a valid signature: %w", err,
 		)
 	}
 
@@ -678,9 +665,9 @@ type parsedAuthorization struct {
 func (v4 *V4) parseAuthorization(rawAuthorization string, expectedDate time.Time, headers http.Header) (parsedAuthorization, error) {
 	rawAlgorithm, afterAlgorithm, ok := strings.Cut(rawAuthorization, " ")
 	if !ok {
-		return parsedAuthorization{}, errors.Join(
+		return parsedAuthorization{}, nestError(
 			ErrAuthorizationHeaderMalformed,
-			errors.New("the Authorization header does not contain expected parts"),
+			"the Authorization header does not contain expected parts",
 		)
 	}
 
@@ -692,9 +679,9 @@ func (v4 *V4) parseAuthorization(rawAuthorization string, expectedDate time.Time
 	pairs := strings.SplitN(afterAlgorithm, ",", 3)
 
 	if len(pairs) != 3 {
-		return parsedAuthorization{}, errors.Join(
+		return parsedAuthorization{}, nestError(
 			ErrAuthorizationHeaderMalformed,
-			errors.New("the Authorization header does not contain expected key=value pairs"),
+			"the Authorization header does not contain expected key=value pairs",
 		)
 	}
 
@@ -732,29 +719,29 @@ type parsedXAmzContentSHA256 struct {
 func (v4 *V4) decodedContentLength(contentLength int64, headers http.Header) (int, error) {
 	rawDecodedContentLength := headers.Get(headerXAmzDecodedContentLength)
 	if rawDecodedContentLength == "" {
-		return 0, errors.Join(
-			ErrInvalidRequest,
-			fmt.Errorf("the %s header is missing", headerXAmzDecodedContentLength),
+		return 0, nestError(
+			ErrMissingSecurityHeader,
+			"the %s header is missing", headerXAmzDecodedContentLength,
 		)
 	}
 
 	decodedContentLength, err := strconv.Atoi(rawDecodedContentLength)
 	if err != nil {
-		return 0, errors.Join(
-			ErrInvalidArgument,
-			fmt.Errorf("the %s header does not contain a valid integer: %w", headerXAmzDecodedContentLength, err),
+		return 0, nestError(
+			ErrInvalidRequest,
+			"the %s header does not contain a valid integer: %w", headerXAmzDecodedContentLength, err,
 		)
 	}
 
 	if te := headers.Get(headerTransferEncoding); contentLength > 0 && te != "identity" {
-		return 0, errors.Join(
-			ErrInvalidArgument,
-			errors.New("the content-length header must have been omitted"),
+		return 0, nestError(
+			ErrInvalidRequest,
+			"the content-length header must have been omitted",
 		)
 	} else if contentLength < 0 && te == "" {
-		return 0, errors.Join(
-			ErrInvalidArgument,
-			errors.New("the content-length header is missing"),
+		return 0, nestError(
+			ErrMissingContentLength,
+			"the content-length header is missing",
 		)
 	}
 
@@ -800,7 +787,10 @@ func (v4 *V4) parseXAmzContentSHA256(rawXAmzContentSHA256 string, contentLength 
 			decodedContentLength: length,
 		}, nil
 	case streamingAWS4ECDSAP256SHA256Payload, streamingAWS4ECDSAP256SHA256PayloadTrailer:
-		return parsedXAmzContentSHA256{}, fmt.Errorf("(streaming) calculation using the AWS4-ECDSA-P256-SHA256 algorithm is not implemented yet: %w", ErrNotImplemented)
+		return parsedXAmzContentSHA256{}, nestError(
+			ErrNotImplemented,
+			"(streaming) calculation using the AWS4-ECDSA-P256-SHA256 algorithm is not implemented yet",
+		)
 	}
 
 	return parsedXAmzContentSHA256{}, nil
@@ -833,16 +823,16 @@ func (v4 *V4) determineIntegrity(rawXAmzContentSHA256 string, options parsedXAmz
 	for h, a := range headerToAlgo {
 		c := headers.Get(h)
 		if specifiedAlgorithm != nil && c != "" {
-			return parsedIntegrity{}, errors.Join(
-				ErrInvalidArgument,
-				errors.New("expecting a single x-amz-checksum- header; multiple checksum types are not allowed"),
+			return parsedIntegrity{}, nestError(
+				ErrInvalidDigest,
+				"expecting a single x-amz-checksum- header; multiple checksum types are not allowed",
 			)
 		}
 		if c != "" {
 			if rawAlgorithm != "" && strings.EqualFold(rawAlgorithm, a.String()) {
-				return parsedIntegrity{}, errors.Join(
-					ErrInvalidArgument,
-					fmt.Errorf("the %s header does not match the %s header", headerXAmzSdkChecksumAlgorithm, h),
+				return parsedIntegrity{}, nestError(
+					ErrInvalidDigest,
+					"the %s header does not match the %s header", headerXAmzSdkChecksumAlgorithm, h,
 				)
 			}
 			specifiedAlgorithm, rawChecksum = &a, c
@@ -851,38 +841,38 @@ func (v4 *V4) determineIntegrity(rawXAmzContentSHA256 string, options parsedXAmz
 
 	if trailerValue := headers.Get(headerXAmzTrailer); trailerValue != "" {
 		if specifiedAlgorithm != nil {
-			return parsedIntegrity{}, errors.Join(
-				ErrInvalidArgument,
-				fmt.Errorf("the x-amz-checksum- header is not allowed when the %s header is present", headerXAmzTrailer),
+			return parsedIntegrity{}, nestError(
+				ErrInvalidRequest,
+				"the x-amz-checksum- header is not allowed when the %s header is present", headerXAmzTrailer,
 			)
 		}
 		if !options.streaming || !options.trailer {
-			return parsedIntegrity{}, errors.Join(
-				ErrInvalidArgument,
-				fmt.Errorf("the %s header is only allowed for streaming requests with trailer signatures", headerXAmzTrailer),
+			return parsedIntegrity{}, nestError(
+				ErrInvalidRequest,
+				"the %s header is only allowed for streaming requests with trailer signatures", headerXAmzTrailer,
 			)
 		}
 
 		a, ok := headerToAlgo[trailerValue]
 		if !ok {
-			return parsedIntegrity{}, errors.Join(
-				ErrInvalidArgument,
-				fmt.Errorf("the %s header does not contain currently supported values", headerXAmzTrailer),
+			return parsedIntegrity{}, nestError(
+				ErrInvalidRequest,
+				"the %s header does not contain currently supported values", headerXAmzTrailer,
 			)
 		}
 
 		if rawAlgorithm != "" && !strings.EqualFold(rawAlgorithm, a.String()) {
-			return parsedIntegrity{}, errors.Join(
-				ErrInvalidArgument,
-				fmt.Errorf("the %s header does not match the %s header", headerXAmzSdkChecksumAlgorithm, headerXAmzTrailer),
+			return parsedIntegrity{}, nestError(
+				ErrInvalidDigest,
+				"the %s header does not match the %s header", headerXAmzSdkChecksumAlgorithm, headerXAmzTrailer,
 			)
 		}
 
 		specifiedAlgorithm = &a
 	} else if options.trailer {
-		return parsedIntegrity{}, errors.Join(
-			ErrInvalidArgument,
-			fmt.Errorf("the %s header is missing", headerXAmzTrailer),
+		return parsedIntegrity{}, nestError(
+			ErrMissingSecurityHeader,
+			"the %s header is missing", headerXAmzTrailer,
 		)
 	}
 
@@ -972,9 +962,9 @@ func (v4 *V4) verify(r *http.Request) (readerOptions, error) {
 
 	parsedDateTime, err := time.Parse(timeFormatISO8601, rawDate)
 	if err != nil {
-		return readerOptions{}, errors.Join(
-			ErrInvalidArgument,
-			fmt.Errorf("the %s or %s header does not contain a valid date: %w", headerXAmzDate, headerDate, err),
+		return readerOptions{}, nestError(
+			ErrInvalidRequest,
+			"the %s or %s header does not contain a valid date: %w", headerXAmzDate, headerDate, err,
 		)
 	}
 
@@ -989,9 +979,9 @@ func (v4 *V4) verify(r *http.Request) (readerOptions, error) {
 
 	rawXAmzContentSHA256 := r.Header.Get(headerXAmzContentSha256)
 	if rawXAmzContentSHA256 == "" {
-		return readerOptions{}, errors.Join(
-			ErrInvalidRequest,
-			fmt.Errorf("the %s header is missing", headerXAmzContentSha256),
+		return readerOptions{}, nestError(
+			ErrMissingSecurityHeader,
+			"the %s header is missing", headerXAmzContentSha256,
 		)
 	}
 
@@ -1005,7 +995,7 @@ func (v4 *V4) verify(r *http.Request) (readerOptions, error) {
 		return readerOptions{}, err
 	}
 
-	secretAccessKey, err := v4.provider.Provide(authorization.credential.accessKeyID)
+	secretAccessKey, err := v4.provider.Provide(r.Context(), authorization.credential.accessKeyID)
 	if err != nil {
 		return readerOptions{}, err
 	}
@@ -1036,7 +1026,10 @@ func (v4 *V4) verify(r *http.Request) (readerOptions, error) {
 }
 
 func (v4 *V4) verifyPresigned(r *http.Request) (readerOptions, error) {
-	return readerOptions{}, fmt.Errorf("verifying presigned requests is not implemented yet: %w", ErrNotImplemented)
+	return readerOptions{}, nestError(
+		ErrNotImplemented,
+		"verifying presigned requests is not implemented yet",
+	)
 }
 
 func (v4 *V4) Verify(r *http.Request) (*V4Reader, error) {
@@ -1053,7 +1046,10 @@ func (v4 *V4) Verify(r *http.Request) (*V4Reader, error) {
 		}
 		return newV4Reader(r.Body, data), nil
 	} else if r.Method == http.MethodPost {
-		return nil, fmt.Errorf("authenticating HTTP POST requests is not implemented yet: %w", ErrNotImplemented)
+		return nil, nestError(
+			ErrNotImplemented,
+			"authenticating HTTP POST requests is not implemented yet",
+		)
 	}
 	return nil, ErrMissingAuthenticationToken
 }

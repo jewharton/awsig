@@ -2,11 +2,40 @@ package awsig
 
 import (
 	"crypto/sha256"
+	"errors"
+	"fmt"
 	"hash"
 	"io"
 	"net/url"
 	"strings"
 )
+
+type nestedError struct {
+	outer error
+	inner error
+}
+
+func (e *nestedError) Error() string {
+	return fmt.Sprintf("%v: %v", e.outer, e.inner)
+}
+
+func (e *nestedError) Unwrap() error {
+	return e.inner
+}
+
+func (e *nestedError) Is(target error) bool {
+	if e.outer == target {
+		return true
+	}
+	return errors.Is(e.inner, target)
+}
+
+func nestError(outer error, format string, a ...any) *nestedError {
+	return &nestedError{
+		outer: outer,
+		inner: fmt.Errorf(format, a...),
+	}
+}
 
 func reuseBuffer(buf []byte, size int) ([]byte, error) {
 	if cap(buf) < size {
