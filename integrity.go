@@ -9,9 +9,8 @@ import (
 	"errors"
 	"hash"
 	"hash/crc32"
+	"hash/crc64"
 	"io"
-
-	"github.com/minio/crc64nvme"
 )
 
 type checksumAlgorithm int
@@ -200,7 +199,7 @@ func newIntegrityReader(r io.Reader, algorithms []checksumAlgorithm) *integrityR
 			}
 		case algorithmCRC64NVME:
 			if ir.crc64nvme == nil {
-				ir.crc64nvme = crc64nvme.New()
+				ir.crc64nvme = crc64.New(crc64.MakeTable(0x9a6c_9329_ac4b_c9b5))
 				writers = append(writers, ir.crc64nvme)
 			}
 		case algorithmSHA1:
