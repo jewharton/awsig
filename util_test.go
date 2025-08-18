@@ -15,13 +15,16 @@ func TestNestedError(t *testing.T) {
 
 	nested := nestError(outer, "oops: %w", inner)
 
-	// Error
-	assert.Equal(t, "outer: oops: inner", nested.Error())
-	// Unwrap
-	assert.Equal(t, inner, errors.Unwrap(errors.Unwrap(nested)))
-	// Is
-	assert.That(t, errors.Is(nested, outer))
-	assert.That(t, errors.Is(nested, inner))
+	t.Run("Error", func(t *testing.T) {
+		assert.Equal(t, "outer: oops: inner", nested.Error())
+	})
+	t.Run("Unwrap", func(t *testing.T) {
+		assert.Equal(t, inner, errors.Unwrap(errors.Unwrap(nested)))
+	})
+	t.Run("Is", func(t *testing.T) {
+		assert.That(t, errors.Is(nested, outer))
+		assert.That(t, errors.Is(nested, inner))
+	})
 }
 
 func TestReuseBuffer(t *testing.T) {
@@ -48,7 +51,6 @@ const (
 )
 
 func TestSHA256Hash(t *testing.T) {
-
 	assert.Equal(t, hashZero, hex.EncodeToString(sha256Hash(nil)))
 	assert.Equal(t, hashTest, hex.EncodeToString(sha256Hash([]byte("test"))))
 }
