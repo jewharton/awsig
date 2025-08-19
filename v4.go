@@ -43,6 +43,7 @@ const (
 	headerAuthorization            = "authorization"
 	headerContentMD5               = "content-md5"
 	headerDate                     = "date"
+	headerHost                     = "host"
 	headerTransferEncoding         = "transfer-encoding"
 	headerXAmzChecksumCrc32        = xAmzHeaderPrefix + "checksum-crc32"
 	headerXAmzChecksumCrc32c       = xAmzHeaderPrefix + "checksum-crc32c"
@@ -477,15 +478,14 @@ type V4 struct {
 }
 
 func (v4 *V4) parseSigningAlgo(rawAlgorithm string) (signingAlgorithm, error) {
-	if !strings.HasPrefix(rawAlgorithm, authorizationHeaderSignaturePrefix) {
+	if !strings.HasPrefix(rawAlgorithm, signingAlgorithmPrefix) {
 		return 0, nestError(
-			ErrAuthorizationHeaderMalformed,
-			"the Algorithm parameter is missing",
+			ErrUnsupportedSignature,
+			"the Authorization header does not contain a valid signing algorithm",
 		)
 	}
-	rawAlgorithm = rawAlgorithm[len(authorizationHeaderSignaturePrefix):]
 
-	switch strings.TrimPrefix(rawAlgorithm, signingAlgorithmPrefix) {
+	switch rawAlgorithm[len(signingAlgorithmPrefix):] {
 	case algorithmHMACSHA256.String():
 		return algorithmHMACSHA256, nil
 	case algorithmECDSAP256SHA256.String():
@@ -600,6 +600,11 @@ func (v4 *V4) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.Hea
 				"the SignedHeaders parameter contains headers that are not sorted: %s < %s", header, previousHeader,
 			)
 		}
+
+		if header == headerHost {
+			hostFound = true
+		}
+
 		previousHeader, signedHeadersLookup[header] = header, struct{}{}
 	}
 
@@ -923,14 +928,24 @@ func (v4 *V4) canonicalRequestHash(r *http.Request, signedHeaders []string, hash
 	}
 	b.WriteByte(lf)
 	// canonical headers
-	//
-	// here's a brainteaser: are they sorted based on lowercased names
-	// or names that were sent over the wire?
-	headerNames := slices.Collect(maps.Keys(r.Header))
+	headerNames := []string{headerHost}
+	for name := range r.Header {
+		if strings.EqualFold(name, headerAuthorization) {
+			continue
+		}
+		headerNames = append(headerNames, strings.ToLower(name))
+	}
 	slices.Sort(headerNames)
 	for _, name := range headerNames {
+		if name == headerHost {
+			b.WriteString(name)
+			b.WriteByte(':')
+			b.WriteString(strings.TrimSpace(r.Host))
+			b.WriteByte(lf)
+			continue
+		}
 		for _, v := range r.Header.Values(name) {
-			b.WriteString(strings.ToLower(name))
+			b.WriteString(name)
 			b.WriteByte(':')
 			b.WriteString(strings.TrimSpace(v))
 			b.WriteByte(lf)

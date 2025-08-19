@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/zeebo/assert"
 )
@@ -18,6 +19,7 @@ func TestV4(t *testing.T) {
 	}
 
 	v4 := NewV4(provider, "us-east-1", "s3")
+	v4.now = dummyNow(2013, time.May, 24, 0, 0, 0)
 
 	t.Run("single chunk", func(t *testing.T) {
 		t.Run("GET", func(t *testing.T) {
@@ -34,6 +36,9 @@ func TestV4(t *testing.T) {
 			n, err := r.Read(p)
 			assert.That(t, n == 0)
 			assert.That(t, errors.Is(err, io.EOF))
+		})
+		t.Run("PUT", func(t *testing.T) {
+			t.SkipNow()
 		})
 	})
 	t.Run("multiple chunks", func(t *testing.T) {
@@ -54,4 +59,10 @@ func (p SimpleCredentialsProvider) Provide(ctx context.Context, accessKeyID stri
 		return "", ErrInvalidAccessKeyID
 	}
 	return p.secretAccessKey, nil
+}
+
+func dummyNow(year int, month time.Month, day, hour, min, sec int) func() time.Time {
+	return func() time.Time {
+		return time.Date(year, month, day, hour, min, sec, 0, time.UTC)
+	}
 }
