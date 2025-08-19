@@ -916,8 +916,8 @@ func (v4 *V4) canonicalRequestHash(r *http.Request, signedHeaders []string, hash
 	query := r.URL.Query()
 	queryParams := slices.Collect(maps.Keys(query))
 	slices.Sort(queryParams)
-	for _, p := range queryParams {
-		for i, v := range query[p] {
+	for i, p := range queryParams {
+		for _, v := range query[p] {
 			if i > 0 {
 				b.WriteByte('&')
 			}
