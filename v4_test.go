@@ -1,6 +1,7 @@
 package awsig
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -85,7 +86,36 @@ func TestV4(t *testing.T) {
 		})
 	})
 	t.Run("multiple chunks", func(t *testing.T) {
-		t.SkipNow()
+		t.Run("PUT Object", func(t *testing.T) {
+			var body strings.Builder
+			body.WriteString("10000;chunk-signature=ad80c730a21e5b8d04586a2213dd63b9a0e99e0e2307b0ade35a65485a288648\r\n")
+			for range 65536 {
+				body.WriteByte('a')
+			}
+			body.WriteString("\r\n")
+			body.WriteString("400;chunk-signature=0055627c9e194cb4542bae2aa5492e3c1575bbb81b612b7d234b86a503ef5497\r\n")
+			for range 1024 {
+				body.WriteByte('a')
+			}
+			body.WriteString("\r\n")
+			body.WriteString("0;chunk-signature=b6c6ea8a5354eaf15b3cb7646744f4275b71ea724fed81ceb9323e279d449df9\r\n")
+
+			req := httptest.NewRequest(http.MethodPut, "https://s3.amazonaws.com/examplebucket/chunkObject.txt", strings.NewReader(body.String()))
+			req.Header.Add("x-amz-date", "20130524T000000Z")
+			req.Header.Add("x-amz-storage-class", "REDUCED_REDUNDANCY")
+			req.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,SignedHeaders=content-encoding;content-length;host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length;x-amz-storage-class,Signature=4f232c4386841ef735655705268965c44a0e4690baa4adea153f7db9fa80a0a9")
+			req.Header.Add("x-amz-content-sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD")
+			req.Header.Add("Content-Encoding", "aws-chunked")
+			req.Header.Add("x-amz-decoded-content-length", "66560")
+			req.Header.Add("Content-Length", "66824")
+
+			r, err := v4.Verify(req)
+			assert.NoError(t, err)
+
+			b, err := io.ReadAll(r)
+			assert.NoError(t, err)
+			assert.Equal(t, bytes.Repeat([]byte{'a'}, 65*1024), b)
+		})
 	})
 	t.Run("trailing headers", func(t *testing.T) {
 		t.SkipNow()

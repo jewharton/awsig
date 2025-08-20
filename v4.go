@@ -235,13 +235,6 @@ func (r *V4Reader) readChunkLength(buf []byte) (int, error) {
 		return 0, ErrIncompleteBody
 	}
 
-	if length != 0 && length < chunkMinLength { // this could be the last chunk
-		return 0, ErrEntityTooSmall
-	}
-	if length > chunkMaxLength {
-		return 0, ErrEntityTooLarge
-	}
-
 	return int(length), nil
 }
 
@@ -434,6 +427,10 @@ func (r *V4Reader) Read(p []byte) (n int, err error) {
 
 		if length == 0 { // completion chunk
 			return n, r.close(p)
+		} else if length > chunkMaxLength {
+			return 0, ErrEntityTooLarge
+		} else if length < chunkMinLength && r.decodedContentLength > int(length) {
+			return 0, ErrEntityTooSmall
 		}
 	}
 
@@ -738,7 +735,7 @@ func (v4 *V4) decodedContentLength(contentLength int64, headers http.Header) (in
 		)
 	}
 
-	if te := headers.Get(headerTransferEncoding); contentLength > 0 && te != "identity" {
+	if te := headers.Get(headerTransferEncoding); contentLength >= 0 && (te != "" && te != "identity") {
 		return 0, nestError(
 			ErrInvalidRequest,
 			"the content-length header must have been omitted",
