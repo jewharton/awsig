@@ -41,6 +41,7 @@ const (
 	xAmzHeaderPrefix = "x-amz-"
 
 	headerAuthorization            = "authorization"
+	headerContentLength            = "content-length"
 	headerContentMD5               = "content-md5"
 	headerDate                     = "date"
 	headerHost                     = "host"
@@ -600,6 +601,11 @@ func (v4 *V4) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.Hea
 
 		if header == headerHost {
 			hostFound = true
+		} else if actualHeaders.Get(header) == "" {
+			return nil, nestError(
+				ErrMissingSecurityHeader,
+				"the %s signed header is not present in the request", header,
+			)
 		}
 
 		previousHeader, signedHeadersLookup[header] = header, struct{}{}
@@ -620,7 +626,7 @@ func (v4 *V4) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.Hea
 			if _, ok := signedHeadersLookup[headerContentMD5]; !ok {
 				return nil, nestError(
 					ErrMissingSecurityHeader,
-					"the SignedHeaders parameter does not contain the content-md5 header",
+					"the SignedHeaders parameter does not contain the %s header", headerContentMD5,
 				)
 			}
 		}
@@ -718,7 +724,7 @@ type parsedXAmzContentSHA256 struct {
 	decodedContentLength int
 }
 
-func (v4 *V4) decodedContentLength(contentLength int64, headers http.Header) (int, error) {
+func (v4 *V4) decodedContentLength(headers http.Header) (int, error) {
 	rawDecodedContentLength := headers.Get(headerXAmzDecodedContentLength)
 	if rawDecodedContentLength == "" {
 		return 0, nestError(
@@ -735,29 +741,31 @@ func (v4 *V4) decodedContentLength(contentLength int64, headers http.Header) (in
 		)
 	}
 
-	if te := headers.Get(headerTransferEncoding); contentLength >= 0 && (te != "" && te != "identity") {
+	cl := headers.Get(headerContentLength)
+	te := headers.Get(headerTransferEncoding)
+	if cl != "" && (te != "" && te != "identity") {
 		return 0, nestError(
 			ErrInvalidRequest,
-			"the content-length header must have been omitted",
+			"the %s header must have been omitted", headerContentLength,
 		)
-	} else if contentLength < 0 && te == "" {
+	} else if cl == "" && te == "" {
 		return 0, nestError(
 			ErrMissingContentLength,
-			"the content-length header is missing",
+			"the %s header is missing", headerContentLength,
 		)
 	}
 
 	return decodedContentLength, nil
 }
 
-func (v4 *V4) parseXAmzContentSHA256(rawXAmzContentSHA256 string, contentLength int64, headers http.Header) (parsedXAmzContentSHA256, error) {
+func (v4 *V4) parseXAmzContentSHA256(rawXAmzContentSHA256 string, headers http.Header) (parsedXAmzContentSHA256, error) {
 	switch rawXAmzContentSHA256 {
 	case unsignedPayload:
 		return parsedXAmzContentSHA256{
 			unsigned: true,
 		}, nil
 	case streamingUnsignedPayloadTrailer:
-		length, err := v4.decodedContentLength(contentLength, headers)
+		length, err := v4.decodedContentLength(headers)
 		if err != nil {
 			return parsedXAmzContentSHA256{}, err
 		}
@@ -768,7 +776,7 @@ func (v4 *V4) parseXAmzContentSHA256(rawXAmzContentSHA256 string, contentLength 
 			decodedContentLength: length,
 		}, nil
 	case streamingAWS4HMACSHA256Payload:
-		length, err := v4.decodedContentLength(contentLength, headers)
+		length, err := v4.decodedContentLength(headers)
 		if err != nil {
 			return parsedXAmzContentSHA256{}, err
 		}
@@ -778,7 +786,7 @@ func (v4 *V4) parseXAmzContentSHA256(rawXAmzContentSHA256 string, contentLength 
 			decodedContentLength: length,
 		}, nil
 	case streamingAWS4HMACSHA256PayloadTrailer:
-		length, err := v4.decodedContentLength(contentLength, headers)
+		length, err := v4.decodedContentLength(headers)
 		if err != nil {
 			return parsedXAmzContentSHA256{}, err
 		}
@@ -880,7 +888,9 @@ func (v4 *V4) determineIntegrity(rawXAmzContentSHA256 string, options parsedXAmz
 
 	if specifiedAlgorithm != nil {
 		ret.sumAlgos = append(ret.sumAlgos, *specifiedAlgorithm)
-		if !options.trailer {
+		if options.trailer {
+			ret.trailingSumAlgo = *specifiedAlgorithm
+		} else {
 			ret.integrity.add(*specifiedAlgorithm, rawChecksum)
 		}
 	} else {
@@ -925,15 +935,10 @@ func (v4 *V4) canonicalRequestHash(r *http.Request, signedHeaders []string, hash
 	}
 	b.WriteByte(lf)
 	// canonical headers
-	headerNames := []string{headerHost}
-	for name := range r.Header {
-		if strings.EqualFold(name, headerAuthorization) {
-			continue
-		}
-		headerNames = append(headerNames, strings.ToLower(name))
-	}
-	slices.Sort(headerNames)
-	for _, name := range headerNames {
+	//
+	// NOTE: parseSignedHeaders already ensured that signedHeaders are
+	// lowercase and sorted.
+	for _, name := range signedHeaders {
 		if name == headerHost {
 			b.WriteString(name)
 			b.WriteByte(':')
@@ -997,7 +1002,7 @@ func (v4 *V4) verify(r *http.Request) (readerOptions, error) {
 		)
 	}
 
-	options, err := v4.parseXAmzContentSHA256(rawXAmzContentSHA256, r.ContentLength, r.Header)
+	options, err := v4.parseXAmzContentSHA256(rawXAmzContentSHA256, r.Header)
 	if err != nil {
 		return readerOptions{}, err
 	}
