@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -87,7 +88,7 @@ func TestV4(t *testing.T) {
 	})
 	t.Run("multiple chunks", func(t *testing.T) {
 		t.Run("PUT Object", func(t *testing.T) {
-			var body strings.Builder
+			body := bytes.NewBuffer(nil)
 			body.WriteString("10000;chunk-signature=ad80c730a21e5b8d04586a2213dd63b9a0e99e0e2307b0ade35a65485a288648\r\n")
 			for range 65536 {
 				body.WriteByte('a')
@@ -100,7 +101,7 @@ func TestV4(t *testing.T) {
 			body.WriteString("\r\n")
 			body.WriteString("0;chunk-signature=b6c6ea8a5354eaf15b3cb7646744f4275b71ea724fed81ceb9323e279d449df9\r\n")
 
-			req := httptest.NewRequest(http.MethodPut, "https://s3.amazonaws.com/examplebucket/chunkObject.txt", strings.NewReader(body.String()))
+			req := httptest.NewRequest(http.MethodPut, "https://s3.amazonaws.com/examplebucket/chunkObject.txt", body)
 			req.Header.Add("x-amz-date", "20130524T000000Z")
 			req.Header.Add("x-amz-storage-class", "REDUCED_REDUNDANCY")
 			req.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,SignedHeaders=content-encoding;content-length;host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length;x-amz-storage-class,Signature=4f232c4386841ef735655705268965c44a0e4690baa4adea153f7db9fa80a0a9")
@@ -119,7 +120,7 @@ func TestV4(t *testing.T) {
 	})
 	t.Run("trailing headers", func(t *testing.T) {
 		t.Run("signed", func(t *testing.T) {
-			var body strings.Builder
+			body := bytes.NewBuffer(nil)
 			body.WriteString("10000;chunk-signature=b474d8862b1487a5145d686f57f013e54db672cee1c953b3010fb58501ef5aa2\r\n")
 			for range 65536 {
 				body.WriteByte('a')
@@ -134,7 +135,7 @@ func TestV4(t *testing.T) {
 			body.WriteString("x-amz-checksum-crc32c:sOO8/Q==\r\n")
 			body.WriteString("x-amz-trailer-signature:d81f82fc3505edab99d459891051a732e8730629a2e4a59689829ca17fe2e435\r\n")
 
-			req := httptest.NewRequest(http.MethodPut, "https://s3.amazonaws.com/examplebucket/chunkObject.txt", strings.NewReader(body.String()))
+			req := httptest.NewRequest(http.MethodPut, "https://s3.amazonaws.com/examplebucket/chunkObject.txt", body)
 			req.Header.Add("x-amz-date", "20130524T000000Z")
 			req.Header.Add("x-amz-storage-class", "REDUCED_REDUNDANCY")
 			req.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,SignedHeaders=content-encoding;host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length;x-amz-storage-class;x-amz-trailer,Signature=106e2a8a18243abcf37539882f36619c00e2dfc72633413f02d3b74544bfeb8e")
@@ -150,6 +151,42 @@ func TestV4(t *testing.T) {
 			b, err := io.ReadAll(r)
 			assert.NoError(t, err)
 			assert.Equal(t, bytes.Repeat([]byte{'a'}, 65*1024), b)
+		})
+		t.Run("unsigned", func(t *testing.T) {
+			body := bytes.NewBuffer(nil)
+			body.WriteString("2000\r\n")
+			for range 8192 {
+				body.WriteByte('a')
+			}
+			body.WriteString("\r\n")
+			body.WriteString("2000\r\n")
+			for range 8192 {
+				body.WriteByte('a')
+			}
+			body.WriteString("\r\n")
+			body.WriteString("400\r\n")
+			for range 1024 {
+				body.WriteByte('a')
+			}
+			body.WriteString("\r\n")
+			body.WriteString("0\r\n")
+			body.WriteString("x-amz-checksum-crc32:s3SFCQ==\n\r\n\r\n")
+
+			req := httptest.NewRequest(http.MethodPut, "https://amzn-s3-demo-bucket.s3.amazonaws.com/Key+", body)
+			req.Header.Add("Content-Encoding", "aws-chunked")
+			req.Header.Add("x-amz-decoded-content-length", "17408")
+			req.Header.Add("x-amz-content-sha256", "STREAMING-UNSIGNED-PAYLOAD-TRAILER")
+			req.Header.Add("x-amz-trailer", "x-amz-checksum-crc32")
+			req.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,SignedHeaders=content-encoding;host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length;x-amz-trailer,Signature=8fdf2b7a7005b82789d2a9cec832705457298e8a6a908f8c85f17e44c707aa64")
+			req.Header.Add("Content-Length", strconv.Itoa(body.Len()))
+			req.Header.Add("x-amz-date", "20130524T000000Z")
+
+			r, err := v4.Verify(req)
+			assert.NoError(t, err)
+
+			b, err := io.ReadAll(r)
+			assert.NoError(t, err)
+			assert.Equal(t, bytes.Repeat([]byte{'a'}, 17*1024), b)
 		})
 	})
 }
