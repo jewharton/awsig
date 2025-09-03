@@ -380,7 +380,7 @@ func (r *V4Reader) close(buf []byte) error {
 		}
 	}
 
-	if err := r.consumeCRLF(buf); !errors.Is(err, io.EOF) {
+	if err := r.consumeCRLF(buf); !errors.Is(err, io.EOF) { // TODO(amwolff): latch the error?
 		return ErrIncompleteBody
 	}
 
@@ -839,7 +839,7 @@ func (v4 *V4) determineIntegrity(rawXAmzContentSHA256 string, options parsedXAmz
 			)
 		}
 		if c != "" {
-			if rawAlgorithm != "" && strings.EqualFold(rawAlgorithm, a.String()) {
+			if rawAlgorithm != "" && !strings.EqualFold(rawAlgorithm, a.String()) {
 				return parsedIntegrity{}, nestError(
 					ErrInvalidDigest,
 					"the %s header does not match the %s header", headerXAmzSdkChecksumAlgorithm, h,
@@ -847,6 +847,13 @@ func (v4 *V4) determineIntegrity(rawXAmzContentSHA256 string, options parsedXAmz
 			}
 			specifiedAlgorithm, rawChecksum = &a, c
 		}
+	}
+
+	if rawAlgorithm != "" && specifiedAlgorithm == nil {
+		return parsedIntegrity{}, nestError(
+			ErrMissingSecurityHeader,
+			"a corresponding x-amz-checksum- header is missing",
+		)
 	}
 
 	if trailerValue := headers.Get(headerXAmzTrailer); trailerValue != "" {
