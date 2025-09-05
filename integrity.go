@@ -1,17 +1,28 @@
 package awsig
 
 import (
+	"bytes"
 	"crypto/md5"
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"hash"
 	"hash/crc32"
 	"hash/crc64"
 	"io"
 )
+
+type Checksums struct {
+	CRC32     []byte
+	CRC32C    []byte
+	CRC64NVME []byte
+	MD5       []byte
+	SHA1      []byte
+	SHA256    []byte
+}
 
 type checksumAlgorithm int
 
@@ -63,48 +74,45 @@ func (a checksumAlgorithm) String() string {
 	}
 }
 
-type expectedIntegrity struct {
-	crc32         *string
-	crc32c        *string
-	crc64nvme     *string
-	md5           *string
-	sha1          *string
-	sha256        *string
-	hashedPayload *string
+type expectedIntegrity map[checksumAlgorithm][]byte
+
+func (i expectedIntegrity) addDecoded(a checksumAlgorithm, value []byte) {
+	i[a] = value
 }
 
-func (i *expectedIntegrity) add(a checksumAlgorithm, value string) {
+func (i expectedIntegrity) addEncoded(a checksumAlgorithm, value []byte) {
 	switch a {
-	case algorithmCRC32:
-		i.crc32 = &value
-	case algorithmCRC32C:
-		i.crc32c = &value
-	case algorithmCRC64NVME:
-		i.crc64nvme = &value
-	case algorithmMD5:
-		i.md5 = &value
-	case algorithmSHA1:
-		i.sha1 = &value
-	case algorithmSHA256:
-		i.sha256 = &value
-	case algorithmHashedPayload:
-		i.hashedPayload = &value
+	case algorithmMD5, algorithmHashedPayload:
+		dst := make([]byte, hex.DecodedLen(len(value)))
+		hex.Decode(dst, value)
+		i.addDecoded(a, dst)
+	default:
+		dst := make([]byte, base64.StdEncoding.DecodedLen(len(value)))
+		base64.StdEncoding.Decode(dst, value)
+		i.addDecoded(a, dst)
 	}
 }
 
-func (i *expectedIntegrity) addString(a checksumAlgorithm, value string) {
-	i.add(a, value) // TODO(amwolff): unnecessary copy
+func (i expectedIntegrity) addEncodedString(a checksumAlgorithm, value string) {
+	var v []byte
+	switch a {
+	case algorithmMD5, algorithmHashedPayload:
+		v, _ = hex.DecodeString(value)
+	default:
+		v, _ = base64.StdEncoding.DecodeString(value)
+	}
+	i.addDecoded(a, v)
+}
+
+func newExpectedIntegrity() expectedIntegrity {
+	return make(expectedIntegrity)
 }
 
 type integrityReader struct {
 	r io.Reader
 
-	crc32     hash.Hash32
-	crc32c    hash.Hash32
-	crc64nvme hash.Hash64
-	md5       hash.Hash
-	sha1      hash.Hash
-	sha256    hash.Hash
+	hashes map[checksumAlgorithm]hash.Hash
+	sums   map[checksumAlgorithm][]byte
 }
 
 func (r *integrityReader) Read(p []byte) (n int, err error) {
@@ -112,106 +120,82 @@ func (r *integrityReader) Read(p []byte) (n int, err error) {
 }
 
 func (r *integrityReader) verify(integrity expectedIntegrity) error {
-	if integrity.crc32 != nil {
-		if r.crc32 == nil {
-			return errors.New("calculation of CRC32 was not requested")
-		}
-		if !equalSumsBase64(*integrity.crc32, r.crc32.Sum(nil)) {
-			return ErrInvalidDigest
-		}
-	}
-	if integrity.crc32c != nil {
-		if r.crc32c == nil {
-			return errors.New("calculation of CRC32C was not requested")
-		}
-		if !equalSumsBase64(*integrity.crc32c, r.crc32c.Sum(nil)) {
-			return ErrInvalidDigest
+	r.sums = make(map[checksumAlgorithm][]byte)
+
+	var errs error
+	for algo := range integrity {
+		if _, ok := r.hashes[algo]; !ok {
+			errs = errors.Join(errs, fmt.Errorf("calculation of %s was not requested", algo))
 		}
 	}
-	if integrity.crc64nvme != nil {
-		if r.crc64nvme == nil {
-			return errors.New("calculation of CRC64NVME was not requested")
+	for algo, h := range r.hashes {
+		sum := h.Sum(nil)
+
+		if algo != algorithmHashedPayload {
+			r.sums[algo] = sum
 		}
-		if !equalSumsBase64(*integrity.crc64nvme, r.crc64nvme.Sum(nil)) {
-			return ErrInvalidDigest
-		}
-	}
-	if integrity.md5 != nil {
-		if !equalSumsHex(*integrity.md5, r.md5.Sum(nil)) {
-			return ErrInvalidDigest
-		}
-	}
-	if integrity.sha1 != nil {
-		if r.sha1 == nil {
-			return errors.New("calculation of SHA1 was not requested")
-		}
-		if !equalSumsBase64(*integrity.sha1, r.sha1.Sum(nil)) {
-			return ErrInvalidDigest
-		}
-	}
-	if integrity.sha256 != nil {
-		if r.sha256 == nil {
-			return errors.New("calculation of SHA256 was not requested")
-		}
-		if !equalSumsBase64(*integrity.sha256, r.sha256.Sum(nil)) {
-			return ErrInvalidDigest
-		}
-	}
-	if integrity.hashedPayload != nil {
-		if r.sha256 == nil {
-			return errors.New("calculation of SHA256 was not requested")
-		}
-		if !equalSumsHex(*integrity.hashedPayload, r.sha256.Sum(nil)) {
-			return ErrInvalidDigest
+
+		if expected, ok := integrity[algo]; !ok {
+			// not requested, skip verification
+		} else if !bytes.Equal(expected, sum) {
+			errs = errors.Join(errs, nestError(
+				ErrInvalidDigest,
+				"%s do not match: expected %x, got %x", algo, expected, sum,
+			))
 		}
 	}
 
 	return nil
 }
 
-func equalSumsBase64(expected string, actual []byte) bool {
-	return expected == base64.StdEncoding.EncodeToString(actual)
-}
-
-func equalSumsHex(expected string, actual []byte) bool {
-	return expected == hex.EncodeToString(actual)
+func (r *integrityReader) checksums() (Checksums, error) {
+	if r.sums == nil {
+		return Checksums{}, errors.New("verify has not been called yet")
+	}
+	return Checksums{
+		CRC32:     r.sums[algorithmCRC32],
+		CRC32C:    r.sums[algorithmCRC32C],
+		CRC64NVME: r.sums[algorithmCRC64NVME],
+		MD5:       r.sums[algorithmMD5],
+		SHA1:      r.sums[algorithmSHA1],
+		SHA256:    r.sums[algorithmSHA256],
+	}, nil
 }
 
 func newIntegrityReader(r io.Reader, algorithms []checksumAlgorithm) *integrityReader {
-	ir := new(integrityReader)
+	ir := &integrityReader{
+		hashes: make(map[checksumAlgorithm]hash.Hash),
+	}
 
 	var writers []io.Writer
 
-	ir.md5 = md5.New() // MD5 is always computed
-	writers = append(writers, ir.md5)
+	h := md5.New()
+	ir.hashes[algorithmMD5] = h // MD5 is always computed
+	writers = append(writers, h)
 
 	for _, a := range algorithms {
 		switch a {
 		case algorithmCRC32:
-			if ir.crc32 == nil {
-				ir.crc32 = crc32.NewIEEE()
-				writers = append(writers, ir.crc32)
-			}
+			h = crc32.NewIEEE()
+			ir.hashes[algorithmCRC32] = h
+			writers = append(writers, h)
 		case algorithmCRC32C:
-			if ir.crc32c == nil {
-				ir.crc32c = crc32.New(crc32.MakeTable(crc32.Castagnoli))
-				writers = append(writers, ir.crc32c)
-			}
+			h = crc32.New(crc32.MakeTable(crc32.Castagnoli))
+			ir.hashes[algorithmCRC32C] = h
+			writers = append(writers, h)
 		case algorithmCRC64NVME:
-			if ir.crc64nvme == nil {
-				ir.crc64nvme = crc64.New(crc64.MakeTable(0x9a6c_9329_ac4b_c9b5))
-				writers = append(writers, ir.crc64nvme)
-			}
+			h = crc64.New(crc64.MakeTable(0x9a6c_9329_ac4b_c9b5))
+			ir.hashes[algorithmCRC64NVME] = h
+			writers = append(writers, h)
 		case algorithmSHA1:
-			if ir.sha1 == nil {
-				ir.sha1 = sha1.New()
-				writers = append(writers, ir.sha1)
-			}
+			h = sha1.New()
+			ir.hashes[algorithmSHA1] = h
+			writers = append(writers, h)
 		case algorithmSHA256, algorithmHashedPayload:
-			if ir.sha256 == nil {
-				ir.sha256 = sha256.New()
-				writers = append(writers, ir.sha256)
-			}
+			h = sha256.New()
+			ir.hashes[algorithmSHA256] = h
+			ir.hashes[algorithmHashedPayload] = h
+			writers = append(writers, h)
 		}
 	}
 

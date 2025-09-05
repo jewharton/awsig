@@ -296,7 +296,7 @@ func (r *V4Reader) readChunkTrailer(buf []byte) error {
 		return ErrIncompleteBody
 	}
 
-	r.integrity.add(r.trailingSumAlgo, string(buf[len(name):len(buf)-1]))
+	r.integrity.addEncoded(r.trailingSumAlgo, buf[len(name):len(buf)-1])
 
 	var (
 		trailingByte = buf[len(buf)-1]
@@ -461,6 +461,10 @@ func (r *V4Reader) Read(p []byte) (n int, err error) {
 	}
 
 	return n, err
+}
+
+func (r *V4Reader) Checksums() (Checksums, error) {
+	return r.ir.checksums()
 }
 
 type CredentialsProvider interface {
@@ -815,7 +819,9 @@ type parsedIntegrity struct {
 func (v4 *V4) determineIntegrity(rawXAmzContentSHA256 string, options parsedXAmzContentSHA256, headers http.Header) (parsedIntegrity, error) {
 	// thanks, Ermiya Eskandary (https://stackoverflow.com/a/77663532)!
 
-	var ret parsedIntegrity
+	ret := parsedIntegrity{
+		integrity: newExpectedIntegrity(),
+	}
 
 	rawAlgorithm := headers.Get(headerXAmzSdkChecksumAlgorithm)
 	headerToAlgo := map[string]checksumAlgorithm{
@@ -898,7 +904,7 @@ func (v4 *V4) determineIntegrity(rawXAmzContentSHA256 string, options parsedXAmz
 		if options.trailer {
 			ret.trailingSumAlgo = *specifiedAlgorithm
 		} else {
-			ret.integrity.add(*specifiedAlgorithm, rawChecksum)
+			ret.integrity.addEncodedString(*specifiedAlgorithm, rawChecksum)
 		}
 	} else {
 		ret.sumAlgos = append(ret.sumAlgos, algorithmCRC64NVME)
@@ -906,12 +912,12 @@ func (v4 *V4) determineIntegrity(rawXAmzContentSHA256 string, options parsedXAmz
 
 	if !options.unsigned && !options.streaming {
 		ret.sumAlgos = append(ret.sumAlgos, algorithmHashedPayload)
-		ret.integrity.add(algorithmHashedPayload, rawXAmzContentSHA256)
+		ret.integrity.addEncodedString(algorithmHashedPayload, rawXAmzContentSHA256)
 	}
 
 	if contentMD5 := headers.Get(headerContentMD5); contentMD5 != "" {
 		ret.sumAlgos = append(ret.sumAlgos, algorithmMD5)
-		ret.integrity.add(algorithmMD5, contentMD5)
+		ret.integrity.addEncodedString(algorithmMD5, contentMD5)
 	}
 
 	return ret, nil
