@@ -1,0 +1,223 @@
+package awsig
+
+import (
+	"crypto/hmac"
+	"crypto/sha1"
+	"errors"
+	"hash"
+	"io"
+	"net/http"
+	"slices"
+	"strings"
+	"time"
+)
+
+const (
+	signatureV2DecodedLength = 20
+	signatureV2EncodedLength = 28
+)
+
+type V2Reader struct {
+	ir        *integrityReader
+	integrity expectedIntegrity
+}
+
+type v2ReaderOptions struct {
+	sumAlgos          []checksumAlgorithm
+	expectedIntegrity expectedIntegrity
+}
+
+func newV2Reader(r io.Reader, data v2ReaderOptions) *V2Reader {
+	return &V2Reader{
+		ir:        newIntegrityReader(r, data.sumAlgos),
+		integrity: data.expectedIntegrity,
+	}
+}
+
+func (r *V2Reader) Read(p []byte) (n int, err error) {
+	if n, err = r.ir.Read(p); errors.Is(err, io.EOF) {
+		if err := r.ir.verify(r.integrity); err != nil {
+			return n, err
+		}
+	}
+	return n, err
+}
+
+func (r *V2Reader) Checksums() (Checksums, error) {
+	return r.ir.checksums()
+}
+
+type V2 struct {
+	provider CredentialsProvider
+	now      func() time.Time
+}
+
+func NewV2(provider CredentialsProvider) *V2 {
+	return &V2{
+		provider: provider,
+		now:      time.Now,
+	}
+}
+
+type parsedAuthorizationV2 struct {
+	accessKeyID string
+	signature   signatureV2
+}
+
+func (v2 *V2) parseAuthorization(rawAuthorization string) (parsedAuthorizationV2, error) {
+	rawAlgorithm, afterAlgorithm, ok := strings.Cut(rawAuthorization, " ")
+	if !ok {
+		return parsedAuthorizationV2{}, nestError(
+			ErrAuthorizationHeaderMalformed,
+			"the Authorization header does not contain expected parts",
+		)
+	}
+
+	if rawAlgorithm != "AWS" {
+		return parsedAuthorizationV2{}, nestError(
+			ErrUnsupportedSignature,
+			"the Authorization header does not contain a valid signing algorithm",
+		)
+	}
+
+	accessKeyID, rawSignature, ok := strings.Cut(afterAlgorithm, ":")
+	if !ok {
+		return parsedAuthorizationV2{}, nestError(
+			ErrAuthorizationHeaderMalformed,
+			"the Authorization header does not contain expected parts",
+		)
+	}
+
+	signature, err := newSignatureV2FromEncoded([]byte(rawSignature))
+	if err != nil {
+		return parsedAuthorizationV2{}, nestError(
+			ErrInvalidSignature,
+			"the Authorization header contains an invalid signature: %w", err,
+		)
+	}
+
+	return parsedAuthorizationV2{
+		accessKeyID: accessKeyID,
+		signature:   signature,
+	}, nil
+}
+
+func (v2 *V2) determineIntegrity(headers http.Header) ([]checksumAlgorithm, expectedIntegrity, error) {
+	return nil, expectedIntegrity{}, nil
+}
+
+func (v2 *V2) calculateSignature(r *http.Request, virtualHostedBucket string, key string) signatureV2 {
+	b := newHashBuilder(func() hash.Hash { return hmac.New(sha1.New, []byte(key)) })
+
+	b.WriteString(r.Method)
+	b.WriteByte(lf)
+	b.WriteString(r.Header.Get(headerContentMD5))
+	b.WriteByte(lf)
+	b.WriteString(r.Header.Get(headerContentType))
+	b.WriteByte(lf)
+	b.WriteString(r.Header.Get(headerDate))
+	b.WriteByte(lf)
+
+	var xAmzHeaderPrefixKeys []string
+	for key := range r.Header {
+		if k := strings.ToLower(key); strings.HasPrefix(k, xAmzHeaderPrefix) {
+			xAmzHeaderPrefixKeys = append(xAmzHeaderPrefixKeys, k)
+		}
+	}
+	slices.Sort(xAmzHeaderPrefixKeys)
+	for _, key := range xAmzHeaderPrefixKeys {
+		b.WriteString(key)
+		b.WriteByte(':')
+		for i, v := range r.Header.Values(key) {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			b.WriteString(v)
+		}
+		b.WriteByte(lf)
+	}
+
+	if virtualHostedBucket != "" {
+		b.WriteString("/")
+		b.WriteString(virtualHostedBucket)
+	}
+	b.WriteString(r.URL.RawPath)
+	b.WriteByte('?')
+	b.WriteString(r.URL.RawQuery)
+
+	return b.Sum()
+}
+
+func (v2 *V2) verify(r *http.Request, virtualHostedBucket string) (v2ReaderOptions, error) {
+	rawDate := r.Header.Get(headerXAmzDate)
+	if rawDate == "" {
+		rawDate = r.Header.Get(headerDate)
+	}
+
+	parsedDateTime, err := time.Parse(http.TimeFormat, rawDate)
+	if err != nil {
+		return v2ReaderOptions{}, nestError(
+			ErrInvalidRequest,
+			"the %s or %s header does not contain a valid date: %w", headerXAmzDate, headerDate, err,
+		)
+	}
+
+	if skew := v2.now().Sub(parsedDateTime); skew < -15*time.Minute || skew > 15*time.Minute {
+		return v2ReaderOptions{}, ErrRequestTimeTooSkewed
+	}
+
+	authorization, err := v2.parseAuthorization(r.Header.Get(headerAuthorization))
+	if err != nil {
+		return v2ReaderOptions{}, err
+	}
+
+	integritySumAlgos, integrity, err := v2.determineIntegrity(r.Header)
+	if err != nil {
+		return v2ReaderOptions{}, err
+	}
+
+	secretAccessKey, err := v2.provider.Provide(r.Context(), authorization.accessKeyID)
+	if err != nil {
+		return v2ReaderOptions{}, err
+	}
+
+	signature := v2.calculateSignature(r, virtualHostedBucket, secretAccessKey)
+
+	if !signature.compare(authorization.signature) {
+		return v2ReaderOptions{}, ErrSignatureDoesNotMatch
+	}
+
+	return v2ReaderOptions{
+		sumAlgos:          integritySumAlgos,
+		expectedIntegrity: integrity,
+	}, nil
+}
+
+func (v2 *V2) verifyPresigned(r *http.Request, virtualHostedBucket string) (v2ReaderOptions, error) {
+	return v2ReaderOptions{}, nestError(
+		ErrNotImplemented,
+		"verifying presigned requests is not implemented yet",
+	)
+}
+
+func (v2 *V2) Verify(r *http.Request, virtualHostedBucket string) (*V2Reader, error) {
+	if r.Header.Get(headerAuthorization) != "" {
+		data, err := v2.verify(r, virtualHostedBucket)
+		if err != nil {
+			return nil, err
+		}
+		return newV2Reader(r.Body, data), nil
+	} else if r.URL.Query().Has(queryXAmzAlgorithm) {
+		data, err := v2.verifyPresigned(r, virtualHostedBucket)
+		if err != nil {
+			return nil, err
+		}
+		return newV2Reader(r.Body, data), nil
+	} else if r.Method == http.MethodPost {
+		return nil, nestError(
+			ErrNotImplemented,
+			"authenticating HTTP POST requests is not implemented yet",
+		)
+	}
+	return nil, ErrMissingAuthenticationToken
+}

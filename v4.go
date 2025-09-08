@@ -2,7 +2,6 @@ package awsig
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"errors"
 	"hash"
@@ -43,6 +42,7 @@ const (
 	headerAuthorization            = "authorization"
 	headerContentLength            = "content-length"
 	headerContentMD5               = "content-md5"
+	headerContentType              = "content-type"
 	headerDate                     = "date"
 	headerHost                     = "host"
 	headerTransferEncoding         = "transfer-encoding"
@@ -467,16 +467,21 @@ func (r *V4Reader) Checksums() (Checksums, error) {
 	return r.ir.checksums()
 }
 
-type CredentialsProvider interface {
-	Provide(ctx context.Context, accessKeyID string) (secretAccessKey string, _ error)
-}
-
 type V4 struct {
 	provider CredentialsProvider
 	region   string
 	service  string
 
 	now func() time.Time
+}
+
+func NewV4(provider CredentialsProvider, region, service string) *V4 {
+	return &V4{
+		provider: provider,
+		region:   region,
+		service:  service,
+		now:      time.Now,
+	}
 }
 
 func (v4 *V4) parseSigningAlgo(rawAlgorithm string) (signingAlgorithm, error) {
@@ -1082,13 +1087,4 @@ func (v4 *V4) Verify(r *http.Request) (*V4Reader, error) {
 		)
 	}
 	return nil, ErrMissingAuthenticationToken
-}
-
-func NewV4(provider CredentialsProvider, region, service string) *V4 {
-	return &V4{
-		provider: provider,
-		region:   region,
-		service:  service,
-		now:      time.Now,
-	}
 }

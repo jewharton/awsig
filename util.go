@@ -1,6 +1,7 @@
 package awsig
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -9,6 +10,10 @@ import (
 	"net/url"
 	"strings"
 )
+
+type CredentialsProvider interface {
+	Provide(ctx context.Context, accessKeyID string) (secretAccessKey string, _ error)
+}
 
 type nestedError struct {
 	outer error
