@@ -82,7 +82,7 @@ func (i expectedIntegrity) addDecoded(a checksumAlgorithm, value []byte) {
 
 func (i expectedIntegrity) addEncoded(a checksumAlgorithm, value []byte) {
 	switch a {
-	case algorithmMD5, algorithmHashedPayload:
+	case algorithmHashedPayload:
 		dst := make([]byte, hex.DecodedLen(len(value)))
 		hex.Decode(dst, value)
 		i.addDecoded(a, dst)
@@ -96,7 +96,7 @@ func (i expectedIntegrity) addEncoded(a checksumAlgorithm, value []byte) {
 func (i expectedIntegrity) addEncodedString(a checksumAlgorithm, value string) {
 	var v []byte
 	switch a {
-	case algorithmMD5, algorithmHashedPayload:
+	case algorithmHashedPayload:
 		v, _ = hex.DecodeString(value)
 	default:
 		v, _ = base64.StdEncoding.DecodeString(value)
