@@ -6,6 +6,7 @@ import (
 	"errors"
 	"hash"
 	"io"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -149,11 +150,64 @@ func (v2 *V2) calculateSignature(r *http.Request, virtualHostedBucket string, ke
 		b.WriteByte('/')
 		b.WriteString(virtualHostedBucket)
 	}
-	b.WriteString(uriEncode(r.URL.Path, true))
+	// NOTE(amwolff): it felt like a bad idea to use a RawPath that
+	// might contain an invalid encoding the software down the chain
+	// might use long after we've authenticated this request.
+	b.WriteString(r.URL.EscapedPath())
 
-	if r.URL.RawQuery != "" {
-		b.WriteByte('?')
-		b.WriteString(r.URL.RawQuery)
+	if query := r.URL.Query(); len(query) > 0 {
+		included := map[string]bool{
+			"acl":                          true,
+			"lifecycle":                    true,
+			"location":                     true,
+			"logging":                      true,
+			"notification":                 true,
+			"partNumber":                   true,
+			"policy":                       true,
+			"requestPayment":               true,
+			"uploadId":                     true,
+			"uploads":                      true,
+			"versionId":                    true,
+			"versioning":                   true,
+			"versions":                     true,
+			"website":                      true,
+			"response-content-type":        false,
+			"response-content-language":    false,
+			"response-expires":             false,
+			"response-cache-control":       false,
+			"response-content-disposition": false,
+			"response-content-encoding":    false,
+			"delete":                       true,
+		}
+
+		queryParams := slices.Collect(maps.Keys(query))
+		slices.Sort(queryParams)
+
+		for i, p := range queryParams {
+			encode, ok := included[p]
+			if !ok {
+				continue
+			}
+
+			if i == 0 {
+				b.WriteByte('?')
+			}
+
+			for _, v := range query[p] {
+				if i > 0 {
+					b.WriteByte('&')
+				}
+				b.WriteString(p)
+				if v != "" {
+					b.WriteByte('=')
+					if encode {
+						b.WriteString(uriEncode(v, false))
+					} else {
+						b.WriteString(v)
+					}
+				}
+			}
+		}
 	}
 
 	return b.Sum()

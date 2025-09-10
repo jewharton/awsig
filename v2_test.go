@@ -58,21 +58,81 @@ func TestV2(t *testing.T) {
 		assert.Equal(t, body, b)
 	})
 	t.Run("List", func(t *testing.T) {
-		t.SkipNow()
+		req := httptest.NewRequest(http.MethodGet, "https://awsexamplebucket1.us-west-1.s3.amazonaws.com/?prefix=photos&max-keys=50&marker=puppy", nil)
+		req.Header.Add("User-Agent", "Mozilla/5.0")
+		req.Header.Add("Date", "Tue, 27 Mar 2007 19:42:41 +0000")
+		req.Header.Add("Authorization", "AWS AKIAIOSFODNN7EXAMPLE:m0WP8eCtspQl5Ahe6L1SozdX9YA=")
+
+		v2 := NewV2(provider)
+		v2.now = dummyNow(2007, time.March, 27, 19, 42, 41)
+
+		r, err := v2.Verify(req, "awsexamplebucket1")
+		assert.NoError(t, err)
+
+		p := make([]byte, 32*1024)
+		n, err := r.Read(p)
+		assert.That(t, n == 0)
+		assert.That(t, errors.Is(err, io.EOF))
 	})
 	t.Run("Fetch", func(t *testing.T) {
-		t.SkipNow()
+		req := httptest.NewRequest(http.MethodGet, "https://awsexamplebucket1.us-west-1.s3.amazonaws.com/?acl", nil)
+		req.Header.Add("Date", "Tue, 27 Mar 2007 19:44:46 +0000")
+		req.Header.Add("Authorization", "AWS AKIAIOSFODNN7EXAMPLE:82ZHiFIjc+WbcwFKGUVEQspPn+0=")
+
+		v2 := NewV2(provider)
+		v2.now = dummyNow(2007, time.March, 27, 19, 44, 46)
+
+		r, err := v2.Verify(req, "awsexamplebucket1")
+		assert.NoError(t, err)
+
+		p := make([]byte, 32*1024)
+		n, err := r.Read(p)
+		assert.That(t, n == 0)
+		assert.That(t, errors.Is(err, io.EOF))
 	})
 	t.Run("Delete", func(t *testing.T) {
+		// NOTE(amwolff): the "Delete" example from
+		// https://docs.aws.amazon.com/AmazonS3/latest/API/RESTAuthentication.html#RESTAuthenticationExamples
+		// is contradictory to the spec…
 		t.SkipNow()
 	})
 	t.Run("Upload", func(t *testing.T) {
+		// NOTE(amwolff): the "Upload" example from
+		// https://docs.aws.amazon.com/AmazonS3/latest/API/RESTAuthentication.html#RESTAuthenticationExamples
+		// doesn't say what the body is, so it's going to be hard to
+		// reproduce the Content-MD5 header.
 		t.SkipNow()
 	})
 	t.Run("List all my buckets", func(t *testing.T) {
-		t.SkipNow()
+		req := httptest.NewRequest(http.MethodGet, "https://s3.us-west-1.amazonaws.com/", nil)
+		req.Header.Add("Date", "Wed, 28 Mar 2007 01:29:59 +0000")
+		req.Header.Add("Authorization", "AWS AKIAIOSFODNN7EXAMPLE:qGdzdERIC03wnaRNKh6OqZehG9s=")
+
+		v2 := NewV2(provider)
+		v2.now = dummyNow(2007, time.March, 28, 1, 29, 59)
+
+		r, err := v2.Verify(req, "")
+		assert.NoError(t, err)
+
+		p := make([]byte, 32*1024)
+		n, err := r.Read(p)
+		assert.That(t, n == 0)
+		assert.That(t, errors.Is(err, io.EOF))
 	})
 	t.Run("Unicode keys", func(t *testing.T) {
-		t.SkipNow()
+		req := httptest.NewRequest(http.MethodGet, "https://s3.us-west-1.amazonaws.com/dictionary/fran%C3%A7ais/pr%c3%a9f%c3%a8re", nil)
+		req.Header.Add("Date", "Wed, 28 Mar 2007 01:49:49 +0000")
+		req.Header.Add("Authorization", "AWS AKIAIOSFODNN7EXAMPLE:DNEZGsoieTZ92F3bUfSPQcbGmlM=")
+
+		v2 := NewV2(provider)
+		v2.now = dummyNow(2007, time.March, 28, 1, 49, 49)
+
+		r, err := v2.Verify(req, "")
+		assert.NoError(t, err)
+
+		p := make([]byte, 32*1024)
+		n, err := r.Read(p)
+		assert.That(t, n == 0)
+		assert.That(t, errors.Is(err, io.EOF))
 	})
 }
