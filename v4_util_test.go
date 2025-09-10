@@ -94,6 +94,34 @@ func TestCalculateSignature(t *testing.T) {
 	})
 }
 
+func TestReuseBuffer(t *testing.T) {
+	buf := make([]byte, 2)
+	{
+		b, err := reuseBuffer(buf, 1)
+		assert.NoError(t, err)
+		assert.Equal(t, 1, len(b))
+	}
+	{
+		b, err := reuseBuffer(buf, 2)
+		assert.NoError(t, err)
+		assert.Equal(t, buf, b)
+	}
+	{
+		_, err := reuseBuffer(buf, 3)
+		assert.Error(t, err)
+	}
+}
+
+func TestSHA256Hash(t *testing.T) {
+	const (
+		hashZero = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+		hashTest = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+	)
+
+	assert.Equal(t, hashZero, hex.EncodeToString(sha256Hash(nil)))
+	assert.Equal(t, hashTest, hex.EncodeToString(sha256Hash([]byte("test"))))
+}
+
 func mustNewSignatureV4FromEncoded(s string) signatureV4 {
 	signature, err := newSignatureV4FromEncoded([]byte(s))
 	if err != nil {

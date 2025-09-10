@@ -1,10 +1,12 @@
 package awsig
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/zeebo/assert"
 )
@@ -27,35 +29,21 @@ func TestNestedError(t *testing.T) {
 	})
 }
 
-func TestReuseBuffer(t *testing.T) {
-	buf := make([]byte, 2)
-	{
-		b, err := reuseBuffer(buf, 1)
-		assert.NoError(t, err)
-		assert.Equal(t, 1, len(b))
-	}
-	{
-		b, err := reuseBuffer(buf, 2)
-		assert.NoError(t, err)
-		assert.Equal(t, buf, b)
-	}
-	{
-		_, err := reuseBuffer(buf, 3)
-		assert.Error(t, err)
-	}
-}
-
-const (
-	hashZero = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-	hashTest = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
-)
-
-func TestSHA256Hash(t *testing.T) {
-	assert.Equal(t, hashZero, hex.EncodeToString(sha256Hash(nil)))
-	assert.Equal(t, hashTest, hex.EncodeToString(sha256Hash([]byte("test"))))
+func TestURIEncode(t *testing.T) {
+	const (
+		testPath   = "photos/Jan/sample.jpg"
+		unreserved = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"
+	)
+	assert.Equal(t, testPath, uriEncode(testPath, true))
+	assert.Equal(t, unreserved+"with%20spaces", uriEncode(unreserved+"with spaces", false))
 }
 
 func TestHashBuilder(t *testing.T) {
+	const (
+		hashZero = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+		hashTest = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+	)
+
 	b := newHashBuilder(sha256.New)
 	b.Write(nil)
 	b.WriteString("")
@@ -68,11 +56,20 @@ func TestHashBuilder(t *testing.T) {
 	assert.Equal(t, "28f0f0df65f6e12393536e8b76b4a227e2e84c323cc4d3fdd5e56966f29019ad", hex.EncodeToString(b.Sum()))
 }
 
-func TestURIEncode(t *testing.T) {
-	const (
-		testPath   = "photos/Jan/sample.jpg"
-		unreserved = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"
-	)
-	assert.Equal(t, testPath, uriEncode(testPath, true))
-	assert.Equal(t, unreserved+"with%20spaces", uriEncode(unreserved+"with spaces", false))
+type simpleCredentialsProvider struct {
+	accessKeyID     string
+	secretAccessKey string
+}
+
+func (p simpleCredentialsProvider) Provide(ctx context.Context, accessKeyID string) (secretAccessKey string, _ error) {
+	if accessKeyID != p.accessKeyID {
+		return "", ErrInvalidAccessKeyID
+	}
+	return p.secretAccessKey, nil
+}
+
+func dummyNow(year int, month time.Month, day, hour, min, sec int) func() time.Time {
+	return func() time.Time {
+		return time.Date(year, month, day, hour, min, sec, 0, time.UTC)
+	}
 }

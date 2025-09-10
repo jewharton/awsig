@@ -2,14 +2,21 @@ package awsig
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"hash"
-	"io"
+	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
+
+var httpTimeFormats = []string{
+	http.TimeFormat,
+	"Mon, 02 Jan 2006 15:04:05 -0700",
+	time.RFC850,
+	time.ANSIC,
+}
 
 type CredentialsProvider interface {
 	Provide(ctx context.Context, accessKeyID string) (secretAccessKey string, _ error)
@@ -42,17 +49,29 @@ func nestError(outer error, format string, a ...any) *nestedError {
 	}
 }
 
-func reuseBuffer(buf []byte, size int) ([]byte, error) {
-	if cap(buf) < size {
-		return nil, io.ErrShortBuffer
+func parseTimeWithFormats(value string, formats []string) (time.Time, error) {
+	var (
+		t   time.Time
+		err error
+	)
+	for _, layout := range formats {
+		t, err = time.Parse(layout, value)
+		if err == nil {
+			return t, nil
+		}
 	}
-	return buf[:size], nil
+	return t, err
 }
 
-func sha256Hash(data []byte) []byte {
-	h := sha256.New()
-	h.Write(data)
-	return h.Sum(nil)
+func uriEncode(value string, path bool) string {
+	encoded := url.QueryEscape(value)
+	oldnews := []string{"+", "%20"}
+
+	if path {
+		oldnews = append(oldnews, "%2F", "/")
+	}
+
+	return strings.NewReplacer(oldnews...).Replace(encoded)
 }
 
 type hashBuilder struct {
@@ -80,15 +99,4 @@ func newHashBuilder(h func() hash.Hash) *hashBuilder {
 	return &hashBuilder{
 		h: h(),
 	}
-}
-
-func uriEncode(value string, path bool) string {
-	encoded := url.QueryEscape(value)
-	oldnews := []string{"+", "%20"}
-
-	if path {
-		oldnews = append(oldnews, "%2F", "/")
-	}
-
-	return strings.NewReplacer(oldnews...).Replace(encoded)
 }

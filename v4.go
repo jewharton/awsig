@@ -484,6 +484,18 @@ func NewV4(provider CredentialsProvider, region, service string) *V4 {
 	}
 }
 
+func (v4 *V4) parseTime(main, alt string) (string, time.Time, error) {
+	parsed, err := parseTimeWithFormats(main, []string{timeFormatISO8601})
+	if err != nil {
+		parsed, err := parseTimeWithFormats(alt, httpTimeFormats)
+		if err != nil {
+			return "", time.Time{}, err
+		}
+		return parsed.Format(timeFormatISO8601), parsed, nil
+	}
+	return main, parsed, nil
+}
+
 func (v4 *V4) parseSigningAlgo(rawAlgorithm string) (signingAlgorithm, error) {
 	if !strings.HasPrefix(rawAlgorithm, signingAlgorithmPrefix) {
 		return 0, nestError(
@@ -990,12 +1002,7 @@ func (v4 *V4) canonicalRequestHash(r *http.Request, signedHeaders []string, hash
 }
 
 func (v4 *V4) verify(r *http.Request) (readerOptions, error) {
-	rawDate := r.Header.Get(headerXAmzDate)
-	if rawDate == "" {
-		rawDate = r.Header.Get(headerDate)
-	}
-
-	parsedDateTime, err := time.Parse(timeFormatISO8601, rawDate)
+	rawDate, parsedDateTime, err := v4.parseTime(r.Header.Get(headerXAmzDate), r.Header.Get(headerDate))
 	if err != nil {
 		return readerOptions{}, nestError(
 			ErrInvalidRequest,

@@ -59,6 +59,14 @@ func NewV2(provider CredentialsProvider) *V2 {
 	}
 }
 
+func (v2 *V2) parseTime(main, alt string) (time.Time, error) {
+	parsed, err := parseTimeWithFormats(main, httpTimeFormats)
+	if err != nil {
+		return parseTimeWithFormats(alt, httpTimeFormats)
+	}
+	return parsed, nil
+}
+
 type parsedAuthorizationV2 struct {
 	accessKeyID string
 	signature   signatureV2
@@ -138,23 +146,21 @@ func (v2 *V2) calculateSignature(r *http.Request, virtualHostedBucket string, ke
 	}
 
 	if virtualHostedBucket != "" {
-		b.WriteString("/")
+		b.WriteByte('/')
 		b.WriteString(virtualHostedBucket)
 	}
-	b.WriteString(r.URL.RawPath)
-	b.WriteByte('?')
-	b.WriteString(r.URL.RawQuery)
+	b.WriteString(uriEncode(r.URL.Path, true))
+
+	if r.URL.RawQuery != "" {
+		b.WriteByte('?')
+		b.WriteString(r.URL.RawQuery)
+	}
 
 	return b.Sum()
 }
 
 func (v2 *V2) verify(r *http.Request, virtualHostedBucket string) (v2ReaderOptions, error) {
-	rawDate := r.Header.Get(headerXAmzDate)
-	if rawDate == "" {
-		rawDate = r.Header.Get(headerDate)
-	}
-
-	parsedDateTime, err := time.Parse(http.TimeFormat, rawDate)
+	parsedDateTime, err := v2.parseTime(r.Header.Get(headerXAmzDate), r.Header.Get(headerDate))
 	if err != nil {
 		return v2ReaderOptions{}, nestError(
 			ErrInvalidRequest,
