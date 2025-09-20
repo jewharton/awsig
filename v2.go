@@ -304,7 +304,12 @@ func (v2 *V2) verifyPresigned(r *http.Request, query url.Values, virtualHostedBu
 }
 
 func (v2 *V2) Verify(r *http.Request, virtualHostedBucket string) (*V2Reader, error) {
-	if r.Header.Get(headerAuthorization) != "" {
+	if r.Method == http.MethodPost {
+		return nil, nestError(
+			ErrNotImplemented,
+			"authenticating HTTP POST requests is not implemented yet",
+		)
+	} else if r.Header.Get(headerAuthorization) != "" {
 		data, err := v2.verify(r, virtualHostedBucket)
 		if err != nil {
 			return nil, err
@@ -316,11 +321,6 @@ func (v2 *V2) Verify(r *http.Request, virtualHostedBucket string) (*V2Reader, er
 			return nil, err
 		}
 		return newV2Reader(r.Body, data), nil
-	} else if r.Method == http.MethodPost {
-		return nil, nestError(
-			ErrNotImplemented,
-			"authenticating HTTP POST requests is not implemented yet",
-		)
 	}
 	return nil, ErrMissingAuthenticationToken
 }

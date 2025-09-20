@@ -1075,7 +1075,12 @@ func (v4 *V4) verifyPresigned(r *http.Request) (readerOptions, error) {
 }
 
 func (v4 *V4) Verify(r *http.Request) (*V4Reader, error) {
-	if r.Header.Get(headerAuthorization) != "" {
+	if r.Method == http.MethodPost {
+		return nil, nestError(
+			ErrNotImplemented,
+			"authenticating HTTP POST requests is not implemented yet",
+		)
+	} else if r.Header.Get(headerAuthorization) != "" {
 		data, err := v4.verify(r)
 		if err != nil {
 			return nil, err
@@ -1087,11 +1092,6 @@ func (v4 *V4) Verify(r *http.Request) (*V4Reader, error) {
 			return nil, err
 		}
 		return newV4Reader(r.Body, data), nil
-	} else if r.Method == http.MethodPost {
-		return nil, nestError(
-			ErrNotImplemented,
-			"authenticating HTTP POST requests is not implemented yet",
-		)
 	}
 	return nil, ErrMissingAuthenticationToken
 }
