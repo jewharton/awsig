@@ -500,7 +500,7 @@ func (v4 *V4) parseSigningAlgo(rawAlgorithm string) (signingAlgorithm, error) {
 	if !strings.HasPrefix(rawAlgorithm, signingAlgorithmPrefix) {
 		return 0, nestError(
 			ErrUnsupportedSignature,
-			"the Authorization header does not contain a valid signing algorithm",
+			"the %s header does not contain a valid signing algorithm", headerAuthorization,
 		)
 	}
 
@@ -515,7 +515,7 @@ func (v4 *V4) parseSigningAlgo(rawAlgorithm string) (signingAlgorithm, error) {
 	default:
 		return 0, nestError(
 			ErrUnsupportedSignature,
-			"the Authorization header does not contain a valid signing algorithm",
+			"the %s header does not contain a valid signing algorithm", headerAuthorization,
 		)
 	}
 }
@@ -696,7 +696,7 @@ func (v4 *V4) parseAuthorization(rawAuthorization string, expectedDate time.Time
 	if !ok {
 		return parsedAuthorization{}, nestError(
 			ErrAuthorizationHeaderMalformed,
-			"the Authorization header does not contain expected parts",
+			"the %s header does not contain expected parts", headerAuthorization,
 		)
 	}
 
@@ -710,7 +710,7 @@ func (v4 *V4) parseAuthorization(rawAuthorization string, expectedDate time.Time
 	if len(pairs) != 3 {
 		return parsedAuthorization{}, nestError(
 			ErrAuthorizationHeaderMalformed,
-			"the Authorization header does not contain expected key=value pairs",
+			"the %s header does not contain expected key=value pairs", headerAuthorization,
 		)
 	}
 

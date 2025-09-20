@@ -6,20 +6,11 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
-	"net/url"
 )
 
 type signatureV2 []byte
 
-func newSignatureV2FromEncoded(s string, urlEncoded bool) (signatureV2, error) {
-	var err error
-
-	if urlEncoded {
-		if s, err = url.QueryUnescape(s); err != nil {
-			return nil, err
-		}
-	}
-
+func newSignatureV2FromEncoded(s string) (signatureV2, error) {
 	if len(s) != signatureV2EncodedLength {
 		return nil, errors.New("invalid signature length")
 	}

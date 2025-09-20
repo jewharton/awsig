@@ -8,12 +8,18 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const (
+	queryAWSAccessKeyId = "AWSAccessKeyId"
+	queryExpires        = "Expires"
+	querySignature      = "Signature"
+
 	signatureV2DecodedLength = 20
 	signatureV2EncodedLength = 28
 )
@@ -78,14 +84,14 @@ func (v2 *V2) parseAuthorization(rawAuthorization string) (parsedAuthorizationV2
 	if !ok {
 		return parsedAuthorizationV2{}, nestError(
 			ErrAuthorizationHeaderMalformed,
-			"the Authorization header does not contain expected parts",
+			"the %s header does not contain expected parts", headerAuthorization,
 		)
 	}
 
 	if rawAlgorithm != "AWS" {
 		return parsedAuthorizationV2{}, nestError(
 			ErrUnsupportedSignature,
-			"the Authorization header does not contain a valid signing algorithm",
+			"the %s header does not contain a valid signing algorithm", headerAuthorization,
 		)
 	}
 
@@ -93,15 +99,15 @@ func (v2 *V2) parseAuthorization(rawAuthorization string) (parsedAuthorizationV2
 	if !ok {
 		return parsedAuthorizationV2{}, nestError(
 			ErrAuthorizationHeaderMalformed,
-			"the Authorization header does not contain expected parts",
+			"the %s header does not contain expected parts", headerAuthorization,
 		)
 	}
 
-	signature, err := newSignatureV2FromEncoded(rawSignature, false)
+	signature, err := newSignatureV2FromEncoded(rawSignature)
 	if err != nil {
 		return parsedAuthorizationV2{}, nestError(
 			ErrInvalidSignature,
-			"the Authorization header contains an invalid signature: %w", err,
+			"the %s header does not contain a valid signature: %w", headerAuthorization, err,
 		)
 	}
 
@@ -112,10 +118,10 @@ func (v2 *V2) parseAuthorization(rawAuthorization string) (parsedAuthorizationV2
 }
 
 func (v2 *V2) determineIntegrity(headers http.Header) ([]checksumAlgorithm, expectedIntegrity, error) {
-	return nil, expectedIntegrity{}, nil
+	return nil, expectedIntegrity{}, nil // TODO(amwolff)
 }
 
-func (v2 *V2) calculateSignature(r *http.Request, virtualHostedBucket string, key string) signatureV2 {
+func (v2 *V2) calculateSignature(r *http.Request, dateElement, virtualHostedBucket, key string) signatureV2 {
 	b := newHashBuilder(func() hash.Hash { return hmac.New(sha1.New, []byte(key)) })
 
 	b.WriteString(r.Method)
@@ -124,7 +130,7 @@ func (v2 *V2) calculateSignature(r *http.Request, virtualHostedBucket string, ke
 	b.WriteByte(lf)
 	b.WriteString(r.Header.Get(headerContentType))
 	b.WriteByte(lf)
-	b.WriteString(r.Header.Get(headerDate))
+	b.WriteString(dateElement)
 	b.WriteByte(lf)
 
 	var xAmzHeaderPrefixKeys []string
@@ -214,7 +220,8 @@ func (v2 *V2) calculateSignature(r *http.Request, virtualHostedBucket string, ke
 }
 
 func (v2 *V2) verify(r *http.Request, virtualHostedBucket string) (v2ReaderOptions, error) {
-	parsedDateTime, err := v2.parseTime(r.Header.Get(headerXAmzDate), r.Header.Get(headerDate))
+	headerDateValue := r.Header.Get(headerDate)
+	parsedDateTime, err := v2.parseTime(r.Header.Get(headerXAmzDate), headerDateValue)
 	if err != nil {
 		return v2ReaderOptions{}, nestError(
 			ErrInvalidRequest,
@@ -241,7 +248,7 @@ func (v2 *V2) verify(r *http.Request, virtualHostedBucket string) (v2ReaderOptio
 		return v2ReaderOptions{}, err
 	}
 
-	signature := v2.calculateSignature(r, virtualHostedBucket, secretAccessKey)
+	signature := v2.calculateSignature(r, headerDateValue, virtualHostedBucket, secretAccessKey)
 
 	if !signature.compare(authorization.signature) {
 		return v2ReaderOptions{}, ErrSignatureDoesNotMatch
@@ -253,11 +260,47 @@ func (v2 *V2) verify(r *http.Request, virtualHostedBucket string) (v2ReaderOptio
 	}, nil
 }
 
-func (v2 *V2) verifyPresigned(r *http.Request, virtualHostedBucket string) (v2ReaderOptions, error) {
-	return v2ReaderOptions{}, nestError(
-		ErrNotImplemented,
-		"verifying presigned requests is not implemented yet",
-	)
+func (v2 *V2) verifyPresigned(r *http.Request, query url.Values, virtualHostedBucket string) (v2ReaderOptions, error) {
+	rawExpires := query.Get(queryExpires)
+
+	expires, err := strconv.ParseInt(rawExpires, 10, 64)
+	if err != nil {
+		return v2ReaderOptions{}, nestError(
+			ErrInvalidRequest,
+			"the %s query parameter does not contain a valid integer: %w", queryExpires, err,
+		)
+	}
+
+	if v2.now().After(time.Unix(expires, 0)) {
+		return v2ReaderOptions{}, ErrRequestTimeTooSkewed
+	}
+
+	signature, err := newSignatureV2FromEncoded(query.Get(querySignature))
+	if err != nil {
+		return v2ReaderOptions{}, nestError(
+			ErrInvalidSignature,
+			"the %s query parameter does not contain a valid signature: %w", querySignature, err,
+		)
+	}
+
+	integritySumAlgos, integrity, err := v2.determineIntegrity(r.Header)
+	if err != nil {
+		return v2ReaderOptions{}, err
+	}
+
+	secretAccessKey, err := v2.provider.Provide(r.Context(), query.Get(queryAWSAccessKeyId))
+	if err != nil {
+		return v2ReaderOptions{}, err
+	}
+
+	if v2.calculateSignature(r, rawExpires, virtualHostedBucket, secretAccessKey).compare(signature) {
+		return v2ReaderOptions{}, ErrSignatureDoesNotMatch
+	}
+
+	return v2ReaderOptions{
+		sumAlgos:          integritySumAlgos,
+		expectedIntegrity: integrity,
+	}, nil
 }
 
 func (v2 *V2) Verify(r *http.Request, virtualHostedBucket string) (*V2Reader, error) {
@@ -267,8 +310,8 @@ func (v2 *V2) Verify(r *http.Request, virtualHostedBucket string) (*V2Reader, er
 			return nil, err
 		}
 		return newV2Reader(r.Body, data), nil
-	} else if r.URL.Query().Has(queryXAmzAlgorithm) {
-		data, err := v2.verifyPresigned(r, virtualHostedBucket)
+	} else if query := r.URL.Query(); query.Has(queryAWSAccessKeyId) {
+		data, err := v2.verifyPresigned(r, query, virtualHostedBucket)
 		if err != nil {
 			return nil, err
 		}

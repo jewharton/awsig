@@ -10,11 +10,11 @@ import (
 
 func TestSignatureV2(t *testing.T) {
 	t.Run("invalid length", func(t *testing.T) {
-		_, err := newSignatureV2FromEncoded("ąćęłńóśźż", false)
+		_, err := newSignatureV2FromEncoded("ąćęłńóśźż")
 		assert.Error(t, err)
 	})
 	t.Run("invalid bytes", func(t *testing.T) {
-		_, err := newSignatureV2FromEncoded(strings.Repeat("_", signatureV2EncodedLength), false)
+		_, err := newSignatureV2FromEncoded(strings.Repeat("_", signatureV2EncodedLength))
 		assert.Error(t, err)
 	})
 
@@ -32,11 +32,11 @@ func TestSignatureV2(t *testing.T) {
 
 func TestSignatureV2WithURLEncoding(t *testing.T) {
 	t.Run("invalid length", func(t *testing.T) {
-		_, err := newSignatureV2FromEncoded("ąćęłńóśźż", true)
+		_, err := newSignatureV2FromEncoded("ąćęłńóśźż")
 		assert.Error(t, err)
 	})
 	t.Run("invalid bytes", func(t *testing.T) {
-		_, err := newSignatureV2FromEncoded(strings.Repeat("_", signatureV2EncodedLength), true)
+		_, err := newSignatureV2FromEncoded(strings.Repeat("_", signatureV2EncodedLength))
 		assert.Error(t, err)
 	})
 
@@ -122,7 +122,7 @@ func TestCalculateSignatureV2(t *testing.T) {
 }
 
 func mustNewSignatureV2FromEncoded(s string) signatureV2 {
-	signature, err := newSignatureV2FromEncoded(s, false)
+	signature, err := newSignatureV2FromEncoded(s)
 	if err != nil {
 		panic(err)
 	}
@@ -130,7 +130,7 @@ func mustNewSignatureV2FromEncoded(s string) signatureV2 {
 }
 
 func mustNewSignatureV2FromURLEncoded(s string) signatureV2 {
-	signature, err := newSignatureV2FromEncoded(s, true)
+	signature, err := newSignatureV2FromEncoded(mustQueryUnescape(s))
 	if err != nil {
 		panic(err)
 	}

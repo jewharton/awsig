@@ -135,4 +135,52 @@ func TestV2(t *testing.T) {
 		assert.That(t, n == 0)
 		assert.That(t, errors.Is(err, io.EOF))
 	})
+	t.Run("presigned 1", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "https://awsexamplebucket1.s3.us-west-1.amazonaws.com/photos/puppy.jpg?AWSAccessKeyId=AKIAIOSFODNN7EXAMPLE&Expires=1141889120&Signature=vjbyPxybdZaNmGa%2ByT272YEAiv4%3D", nil)
+		req.Header.Add("Date", "Thu, 09 Mar 2006 07:25:20 GMT")
+
+		v2 := NewV2(provider)
+		v2.now = dummyNow(2006, time.March, 9, 7, 25, 20)
+
+		r, err := v2.Verify(req, "awsexamplebucket1")
+		assert.NoError(t, err)
+
+		p := make([]byte, 32*1024)
+		n, err := r.Read(p)
+		assert.That(t, n == 0)
+		assert.That(t, errors.Is(err, io.EOF))
+	})
+	t.Run("presigned 2", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "https://awsexamplebucket1.s3.us-west-1.amazonaws.com/photos/puppy.jpg?AWSAccessKeyId=AKIAIOSFODNN7EXAMPLE&Signature=NpgCjnDzrM%2BWFzoENXmpNDUsSn8%3D&Expires=1175139620", nil)
+
+		v2 := NewV2(provider)
+		v2.now = dummyNow(2007, time.March, 29, 3, 40, 19)
+
+		r, err := v2.Verify(req, "awsexamplebucket1")
+		assert.NoError(t, err)
+
+		p := make([]byte, 32*1024)
+		n, err := r.Read(p)
+		assert.That(t, n == 0)
+		assert.That(t, errors.Is(err, io.EOF))
+	})
+	t.Run("expired presigned 1", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "https://awsexamplebucket1.s3.us-west-1.amazonaws.com/photos/puppy.jpg?AWSAccessKeyId=AKIAIOSFODNN7EXAMPLE&Expires=1141889120&Signature=vjbyPxybdZaNmGa%2ByT272YEAiv4%3D", nil)
+		req.Header.Add("Date", "Mon, 26 Mar 2007 19:37:58 +0000")
+
+		v2 := NewV2(provider)
+		v2.now = dummyNow(2007, time.March, 26, 19, 37, 58)
+
+		_, err := v2.Verify(req, "awsexamplebucket1")
+		assert.Error(t, err)
+	})
+	t.Run("expired presigned 2", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "https://awsexamplebucket1.s3.us-west-1.amazonaws.com/photos/puppy.jpg?AWSAccessKeyId=AKIAIOSFODNN7EXAMPLE&Signature=NpgCjnDzrM%2BWFzoENXmpNDUsSn8%3D&Expires=1175139620", nil)
+
+		v2 := NewV2(provider)
+		v2.now = dummyNow(2007, time.March, 29, 3, 40, 21)
+
+		_, err := v2.Verify(req, "awsexamplebucket1")
+		assert.Error(t, err)
+	})
 }
