@@ -1,7 +1,8 @@
 package awsig
 
 import (
-	"bytes"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/zeebo/assert"
@@ -9,11 +10,11 @@ import (
 
 func TestSignatureV2(t *testing.T) {
 	t.Run("invalid length", func(t *testing.T) {
-		_, err := newSignatureV2FromEncoded([]byte("ąćęłńóśźż"))
+		_, err := newSignatureV2FromEncoded("ąćęłńóśźż", false)
 		assert.Error(t, err)
 	})
 	t.Run("invalid bytes", func(t *testing.T) {
-		_, err := newSignatureV2FromEncoded(bytes.Repeat([]byte{0}, signatureV2EncodedLength))
+		_, err := newSignatureV2FromEncoded(strings.Repeat("_", signatureV2EncodedLength), false)
 		assert.Error(t, err)
 	})
 
@@ -26,6 +27,28 @@ func TestSignatureV2(t *testing.T) {
 	assert.True(t, signature.compare(otherSame))
 	assert.Equal(t, encoded, signature.String())
 	assert.Equal(t, encoded, otherSame.String())
+	assert.False(t, signature.compare(otherDiff))
+}
+
+func TestSignatureV2WithURLEncoding(t *testing.T) {
+	t.Run("invalid length", func(t *testing.T) {
+		_, err := newSignatureV2FromEncoded("ąćęłńóśźż", true)
+		assert.Error(t, err)
+	})
+	t.Run("invalid bytes", func(t *testing.T) {
+		_, err := newSignatureV2FromEncoded(strings.Repeat("_", signatureV2EncodedLength), true)
+		assert.Error(t, err)
+	})
+
+	const encoded = "vjbyPxybdZaNmGa%2ByT272YEAiv4%3D"
+
+	signature := mustNewSignatureV2FromURLEncoded(encoded)
+	otherSame := mustNewSignatureV2FromURLEncoded(encoded)
+	otherDiff := mustNewSignatureV2FromURLEncoded("NpgCjnDzrM%2BWFzoENXmpNDUsSn8%3D")
+
+	assert.True(t, signature.compare(otherSame))
+	assert.Equal(t, mustQueryUnescape(encoded), signature.String())
+	assert.Equal(t, mustQueryUnescape(encoded), otherSame.String())
 	assert.False(t, signature.compare(otherDiff))
 }
 
@@ -99,9 +122,25 @@ func TestCalculateSignatureV2(t *testing.T) {
 }
 
 func mustNewSignatureV2FromEncoded(s string) signatureV2 {
-	signature, err := newSignatureV2FromEncoded([]byte(s))
+	signature, err := newSignatureV2FromEncoded(s, false)
 	if err != nil {
 		panic(err)
 	}
 	return signature
+}
+
+func mustNewSignatureV2FromURLEncoded(s string) signatureV2 {
+	signature, err := newSignatureV2FromEncoded(s, true)
+	if err != nil {
+		panic(err)
+	}
+	return signature
+}
+
+func mustQueryUnescape(s string) string {
+	u, err := url.QueryUnescape(s)
+	if err != nil {
+		panic(err)
+	}
+	return u
 }

@@ -97,7 +97,7 @@ func (v2 *V2) parseAuthorization(rawAuthorization string) (parsedAuthorizationV2
 		)
 	}
 
-	signature, err := newSignatureV2FromEncoded([]byte(rawSignature))
+	signature, err := newSignatureV2FromEncoded(rawSignature, false)
 	if err != nil {
 		return parsedAuthorizationV2{}, nestError(
 			ErrInvalidSignature,

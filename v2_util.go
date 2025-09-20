@@ -5,27 +5,26 @@ import (
 	"crypto/sha1"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
+	"net/url"
 )
 
 type signatureV2 []byte
 
-func newSignatureV2FromEncoded(b []byte) (signatureV2, error) {
-	if len(b) != signatureV2EncodedLength {
-		return nil, ErrInvalidSignature
+func newSignatureV2FromEncoded(s string, urlEncoded bool) (signatureV2, error) {
+	var err error
+
+	if urlEncoded {
+		if s, err = url.QueryUnescape(s); err != nil {
+			return nil, err
+		}
 	}
 
-	s := make(signatureV2, signatureV2DecodedLength)
-
-	n, err := base64.StdEncoding.Decode(s, b)
-	if err != nil {
-		return nil, ErrInvalidSignature
+	if len(s) != signatureV2EncodedLength {
+		return nil, errors.New("invalid signature length")
 	}
 
-	if n != signatureV2DecodedLength {
-		return nil, ErrInvalidSignature
-	}
-
-	return s, nil
+	return base64.StdEncoding.DecodeString(s)
 }
 
 func (s signatureV2) compare(other signatureV2) bool {
