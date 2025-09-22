@@ -19,9 +19,6 @@ const (
 	queryAWSAccessKeyId = "AWSAccessKeyId"
 	queryExpires        = "Expires"
 	querySignature      = "Signature"
-
-	signatureV2DecodedLength = 20
-	signatureV2EncodedLength = 28
 )
 
 type V2Reader struct {

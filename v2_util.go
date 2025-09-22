@@ -8,6 +8,11 @@ import (
 	"errors"
 )
 
+const (
+	signatureV2DecodedLength = 20
+	signatureV2EncodedLength = 28
+)
+
 type signatureV2 []byte
 
 func newSignatureV2FromEncoded(s string) (signatureV2, error) {

@@ -14,53 +14,17 @@ import (
 	"time"
 )
 
-var (
-	ErrAuthorizationHeaderMalformed = errors.New("the authorization header that you provided is not valid")
-	ErrEntityTooLarge               = errors.New("your proposed upload exceeds the maximum allowed object size")
-	ErrEntityTooSmall               = errors.New("your proposed upload is smaller than the minimum allowed object size")
-	ErrIncompleteBody               = errors.New("you did not provide the number of bytes specified by the Content-Length HTTP header")
-	ErrInvalidArgument              = errors.New("invalid argument")
-	ErrInvalidDigest                = errors.New("the Content-MD5 or checksum value that you specified is not valid")
-	ErrInvalidRequest               = errors.New("invalid request")
-	ErrInvalidSignature             = errors.New("the request signature that the server calculated does not match the signature that you provided")
-	ErrMissingAuthenticationToken   = errors.New("the request was not signed")
-	ErrMissingContentLength         = errors.New("you must provide the Content-Length HTTP header")
-	ErrMissingSecurityHeader        = errors.New("your request is missing a required header")
-	ErrRequestTimeTooSkewed         = errors.New("the difference between the request time and the server's time is too large")
-	ErrSignatureDoesNotMatch        = errors.New("the request signature that the server calculated does not match the signature that you provided")
-	ErrUnsupportedSignature         = errors.New("the provided request is signed with an unsupported STS Token version or the signature version is not supported")
-
-	ErrAccessDenied       = errors.New("access denied")
-	ErrInvalidAccessKeyID = errors.New("the AWS access key ID that you provided does not exist in our records")
-
-	ErrNotImplemented = errors.New("not implemented")
-)
-
 const (
-	xAmzHeaderPrefix = "x-amz-"
-
-	headerAuthorization            = "authorization"
 	headerContentLength            = "content-length"
-	headerContentMD5               = "content-md5"
-	headerContentType              = "content-type"
-	headerDate                     = "date"
 	headerHost                     = "host"
 	headerTransferEncoding         = "transfer-encoding"
-	headerXAmzChecksumCrc32        = xAmzHeaderPrefix + "checksum-crc32"
-	headerXAmzChecksumCrc32c       = xAmzHeaderPrefix + "checksum-crc32c"
-	headerXAmzChecksumCrc64nvme    = xAmzHeaderPrefix + "checksum-crc64nvme"
-	headerXAmzChecksumSha1         = xAmzHeaderPrefix + "checksum-sha1"
-	headerXAmzChecksumSha256       = xAmzHeaderPrefix + "checksum-sha256"
-	headerXAmzContentSha256        = xAmzHeaderPrefix + "content-sha256"
-	headerXAmzDate                 = xAmzHeaderPrefix + "date"
 	headerXAmzDecodedContentLength = xAmzHeaderPrefix + "decoded-content-length"
-	headerXAmzSdkChecksumAlgorithm = xAmzHeaderPrefix + "sdk-checksum-algorithm"
 	headerXAmzTrailer              = xAmzHeaderPrefix + "trailer"
 
-	authorizationHeaderCredentialPrefix     = "Credential="
-	authorizationHeaderSignedHeadersPrefix  = "SignedHeaders="
-	authorizationHeaderSignaturePrefix      = "Signature="
-	authorizationHeaderCredentialTerminator = "aws4_request"
+	v4AuthorizationHeaderCredentialPrefix     = "Credential="
+	v4AuthorizationHeaderSignedHeadersPrefix  = "SignedHeaders="
+	v4AuthorizationHeaderSignaturePrefix      = "Signature="
+	v4AuthorizationHeaderCredentialTerminator = "aws4_request"
 
 	unsignedPayload                            = "UNSIGNED-PAYLOAD"
 	streamingUnsignedPayloadTrailer            = "STREAMING-UNSIGNED-PAYLOAD-TRAILER"
@@ -75,9 +39,6 @@ const (
 	queryXAmzExpires       = "X-Amz-Expires"
 	queryXAmzSignedHeaders = "X-Amz-SignedHeaders"
 	queryXAmzSignature     = "X-Amz-Signature"
-
-	signatureV4DecodedLength = 32
-	signatureV4EncodedLength = 64
 
 	chunkMaxLengthEncoded        = "140000000"
 	chunkMaxLength               = 5368709120 // 5 GiB
@@ -526,14 +487,14 @@ type parsedCredential struct {
 }
 
 func (v4 *V4) parseCredential(rawCredential string, expectedDate time.Time) (parsedCredential, error) {
-	if !strings.HasPrefix(rawCredential, authorizationHeaderCredentialPrefix) {
+	if !strings.HasPrefix(rawCredential, v4AuthorizationHeaderCredentialPrefix) {
 		return parsedCredential{}, nestError(
 			ErrAuthorizationHeaderMalformed,
 			"the Credential parameter is missing",
 		)
 	}
 
-	parts := strings.SplitN(rawCredential[len(authorizationHeaderCredentialPrefix):], "/", 5)
+	parts := strings.SplitN(rawCredential[len(v4AuthorizationHeaderCredentialPrefix):], "/", 5)
 
 	if len(parts) != 5 {
 		return parsedCredential{}, nestError(
@@ -573,7 +534,7 @@ func (v4 *V4) parseCredential(rawCredential string, expectedDate time.Time) (par
 		)
 	}
 
-	if parts[4] != authorizationHeaderCredentialTerminator {
+	if parts[4] != v4AuthorizationHeaderCredentialTerminator {
 		return parsedCredential{}, nestError(
 			ErrAuthorizationHeaderMalformed,
 			"the Credential parameter does not contain the expected terminator",
@@ -591,13 +552,13 @@ func (v4 *V4) parseCredential(rawCredential string, expectedDate time.Time) (par
 }
 
 func (v4 *V4) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.Header) ([]string, error) {
-	if !strings.HasPrefix(rawSignedHeaders, authorizationHeaderSignedHeadersPrefix) {
+	if !strings.HasPrefix(rawSignedHeaders, v4AuthorizationHeaderSignedHeadersPrefix) {
 		return nil, nestError(
 			ErrAuthorizationHeaderMalformed,
 			"the SignedHeaders parameter is missing",
 		)
 	}
-	rawSignedHeaders = rawSignedHeaders[len(authorizationHeaderSignedHeadersPrefix):]
+	rawSignedHeaders = rawSignedHeaders[len(v4AuthorizationHeaderSignedHeadersPrefix):]
 
 	signedHeaders := strings.Split(rawSignedHeaders, ";")
 	signedHeadersLookup := make(map[string]struct{})
@@ -665,13 +626,13 @@ func (v4 *V4) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.Hea
 }
 
 func (v4 *V4) parseSignature(rawSignature string) (signatureV4, error) {
-	if !strings.HasPrefix(rawSignature, authorizationHeaderSignaturePrefix) {
+	if !strings.HasPrefix(rawSignature, v4AuthorizationHeaderSignaturePrefix) {
 		return nil, nestError(
 			ErrAuthorizationHeaderMalformed,
 			"the Signature parameter is missing",
 		)
 	}
-	rawSignature = rawSignature[len(authorizationHeaderSignaturePrefix):]
+	rawSignature = rawSignature[len(v4AuthorizationHeaderSignaturePrefix):]
 
 	signature, err := newSignatureV4FromEncoded([]byte(rawSignature))
 	if err != nil {

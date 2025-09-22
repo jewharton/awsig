@@ -10,10 +10,10 @@ import (
 )
 
 const (
-	timeFormatISO8601  = "20060102T150405Z"
-	timeFormatYYYYMMDD = "20060102"
-
 	v4SigningAlgorithmPrefix = "AWS4-"
+
+	signatureV4DecodedLength = 32
+	signatureV4EncodedLength = 64
 )
 
 type v4SigningAlgorithm int
@@ -60,7 +60,7 @@ type scope struct {
 }
 
 func (s scope) String() string {
-	return s.date + "/" + s.region + "/" + s.service + "/" + authorizationHeaderCredentialTerminator
+	return s.date + "/" + s.region + "/" + s.service + "/" + v4AuthorizationHeaderCredentialTerminator
 }
 
 type signatureV4 []byte
@@ -111,7 +111,7 @@ func signingKeyHMACSHA256(key, date, region, service string) []byte {
 	dateKey := hmacSHA256([]byte("AWS4"+key), date)
 	dateRegionKey := hmacSHA256(dateKey, region)
 	dateRegionServiceKey := hmacSHA256(dateRegionKey, service)
-	return hmacSHA256(dateRegionServiceKey, authorizationHeaderCredentialTerminator)
+	return hmacSHA256(dateRegionServiceKey, v4AuthorizationHeaderCredentialTerminator)
 }
 
 func calculateSignatureV4(data signatureV4Data, secretAccessKey string) signatureV4 {

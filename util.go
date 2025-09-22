@@ -11,6 +11,48 @@ import (
 	"time"
 )
 
+var (
+	ErrAuthorizationHeaderMalformed = errors.New("the authorization header that you provided is not valid")
+	ErrEntityTooLarge               = errors.New("your proposed upload exceeds the maximum allowed object size")
+	ErrEntityTooSmall               = errors.New("your proposed upload is smaller than the minimum allowed object size")
+	ErrIncompleteBody               = errors.New("you did not provide the number of bytes specified by the Content-Length HTTP header")
+	ErrInvalidArgument              = errors.New("invalid argument")
+	ErrInvalidDigest                = errors.New("the Content-MD5 or checksum value that you specified is not valid")
+	ErrInvalidRequest               = errors.New("invalid request")
+	ErrInvalidSignature             = errors.New("the request signature that the server calculated does not match the signature that you provided")
+	ErrMissingAuthenticationToken   = errors.New("the request was not signed")
+	ErrMissingContentLength         = errors.New("you must provide the Content-Length HTTP header")
+	ErrMissingSecurityHeader        = errors.New("your request is missing a required header")
+	ErrRequestTimeTooSkewed         = errors.New("the difference between the request time and the server's time is too large")
+	ErrSignatureDoesNotMatch        = errors.New("the request signature that the server calculated does not match the signature that you provided")
+	ErrUnsupportedSignature         = errors.New("the provided request is signed with an unsupported STS Token version or the signature version is not supported")
+
+	ErrAccessDenied       = errors.New("access denied")
+	ErrInvalidAccessKeyID = errors.New("the AWS access key ID that you provided does not exist in our records")
+
+	ErrNotImplemented = errors.New("not implemented")
+)
+
+const (
+	xAmzHeaderPrefix = "x-amz-"
+
+	headerAuthorization            = "authorization"
+	headerContentMD5               = "content-md5"
+	headerContentType              = "content-type"
+	headerDate                     = "date"
+	headerXAmzChecksumCrc32        = xAmzHeaderPrefix + "checksum-crc32"
+	headerXAmzChecksumCrc32c       = xAmzHeaderPrefix + "checksum-crc32c"
+	headerXAmzChecksumCrc64nvme    = xAmzHeaderPrefix + "checksum-crc64nvme"
+	headerXAmzChecksumSha1         = xAmzHeaderPrefix + "checksum-sha1"
+	headerXAmzChecksumSha256       = xAmzHeaderPrefix + "checksum-sha256"
+	headerXAmzContentSha256        = xAmzHeaderPrefix + "content-sha256"
+	headerXAmzDate                 = xAmzHeaderPrefix + "date"
+	headerXAmzSdkChecksumAlgorithm = xAmzHeaderPrefix + "sdk-checksum-algorithm"
+
+	timeFormatISO8601  = "20060102T150405Z"
+	timeFormatYYYYMMDD = "20060102"
+)
+
 var httpTimeFormats = []string{
 	http.TimeFormat,
 	"Mon, 02 Jan 2006 15:04:05 -0700",
