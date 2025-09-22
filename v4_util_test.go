@@ -30,7 +30,7 @@ func TestSignatureV4(t *testing.T) {
 	assert.False(t, signature.compare(otherDiff))
 }
 
-func TestCalculateSignature(t *testing.T) {
+func TestCalculateSignatureV4(t *testing.T) {
 	const (
 		secretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 		dateTime        = "20130524T000000Z"
@@ -44,7 +44,7 @@ func TestCalculateSignature(t *testing.T) {
 
 	t.Run("no suffix", func(t *testing.T) {
 		digest := mustHexDecodeString("9e0e90d9c76de8fa5b200d8c849cd5b8dc7a3be3951ddb7f6a76b4158342019d")
-		data := signatureData{
+		data := signatureV4Data{
 			algorithm:       algorithmHMACSHA256,
 			algorithmSuffix: algorithmSuffixNone,
 			dateTime:        dateTime,
@@ -53,7 +53,7 @@ func TestCalculateSignature(t *testing.T) {
 			digest:          digest,
 		}
 
-		actual := calculateSignature(data, secretAccessKey)
+		actual := calculateSignatureV4(data, secretAccessKey)
 		expected := mustNewSignatureV4FromEncoded("98ad721746da40c64f1a55b78f14c238d841ea1380cd77a1b5971af0ece108bd")
 
 		assert.True(t, expected.compare(actual))
@@ -61,7 +61,7 @@ func TestCalculateSignature(t *testing.T) {
 	t.Run("with AWS4-HMAC-SHA256-PAYLOAD", func(t *testing.T) {
 		previous := mustNewSignatureV4FromEncoded("4f232c4386841ef735655705268965c44a0e4690baa4adea153f7db9fa80a0a9")
 		digest := mustHexDecodeString("bf718b6f653bebc184e1479f1935b8da974d701b893afcf49e701f3e2f9f9c5a")
-		data := signatureData{
+		data := signatureV4Data{
 			algorithm:       algorithmHMACSHA256,
 			algorithmSuffix: algorithmSuffixPayload,
 			dateTime:        dateTime,
@@ -70,7 +70,7 @@ func TestCalculateSignature(t *testing.T) {
 			digest:          digest,
 		}
 
-		actual := calculateSignature(data, secretAccessKey)
+		actual := calculateSignatureV4(data, secretAccessKey)
 		expected := mustNewSignatureV4FromEncoded("ad80c730a21e5b8d04586a2213dd63b9a0e99e0e2307b0ade35a65485a288648")
 
 		assert.True(t, expected.compare(actual))
@@ -78,7 +78,7 @@ func TestCalculateSignature(t *testing.T) {
 	t.Run("with AWS4-HMAC-SHA256-TRAILER", func(t *testing.T) {
 		previous := mustNewSignatureV4FromEncoded("2ca2aba2005185cf7159c6277faf83795951dd77a3a99e6e65d5c9f85863f992")
 		digest := mustHexDecodeString("1e376db7e1a34a8ef1c4bcee131a2d60a1cb62503747488624e10995f448d774")
-		data := signatureData{
+		data := signatureV4Data{
 			algorithm:       algorithmHMACSHA256,
 			algorithmSuffix: algorithmSuffixTrailer,
 			dateTime:        dateTime,
@@ -87,7 +87,7 @@ func TestCalculateSignature(t *testing.T) {
 			digest:          digest,
 		}
 
-		actual := calculateSignature(data, secretAccessKey)
+		actual := calculateSignatureV4(data, secretAccessKey)
 		expected := mustNewSignatureV4FromEncoded("d81f82fc3505edab99d459891051a732e8730629a2e4a59689829ca17fe2e435")
 
 		assert.True(t, expected.compare(actual))

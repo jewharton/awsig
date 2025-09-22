@@ -13,17 +13,17 @@ const (
 	timeFormatISO8601  = "20060102T150405Z"
 	timeFormatYYYYMMDD = "20060102"
 
-	signingAlgorithmPrefix = "AWS4-"
+	v4SigningAlgorithmPrefix = "AWS4-"
 )
 
-type signingAlgorithm int
+type v4SigningAlgorithm int
 
 const (
-	algorithmHMACSHA256 signingAlgorithm = iota
+	algorithmHMACSHA256 v4SigningAlgorithm = iota
 	algorithmECDSAP256SHA256
 )
 
-func (a signingAlgorithm) String() string {
+func (a v4SigningAlgorithm) String() string {
 	switch a {
 	case algorithmHMACSHA256:
 		return "HMAC-SHA256"
@@ -34,15 +34,15 @@ func (a signingAlgorithm) String() string {
 	}
 }
 
-type signingAlgorithmSuffix int
+type v4SigningAlgorithmSuffix int
 
 const (
-	algorithmSuffixNone signingAlgorithmSuffix = iota
+	algorithmSuffixNone v4SigningAlgorithmSuffix = iota
 	algorithmSuffixPayload
 	algorithmSuffixTrailer
 )
 
-func (s signingAlgorithmSuffix) String() string {
+func (s v4SigningAlgorithmSuffix) String() string {
 	switch s {
 	case algorithmSuffixPayload:
 		return "-PAYLOAD"
@@ -92,9 +92,9 @@ func (s signatureV4) String() string {
 	return hex.EncodeToString(s)
 }
 
-type signatureData struct {
-	algorithm       signingAlgorithm
-	algorithmSuffix signingAlgorithmSuffix
+type signatureV4Data struct {
+	algorithm       v4SigningAlgorithm
+	algorithmSuffix v4SigningAlgorithmSuffix
 	dateTime        string
 	scope           scope
 	previous        signatureV4
@@ -114,7 +114,7 @@ func signingKeyHMACSHA256(key, date, region, service string) []byte {
 	return hmacSHA256(dateRegionServiceKey, authorizationHeaderCredentialTerminator)
 }
 
-func calculateSignature(data signatureData, secretAccessKey string) signatureV4 {
+func calculateSignatureV4(data signatureV4Data, secretAccessKey string) signatureV4 {
 	if data.algorithm == algorithmECDSAP256SHA256 {
 		panic("not implemented")
 	}
@@ -123,7 +123,7 @@ func calculateSignature(data signatureData, secretAccessKey string) signatureV4 
 
 	b := newHashBuilder(func() hash.Hash { return hmac.New(sha256.New, key) })
 
-	b.WriteString(signingAlgorithmPrefix)
+	b.WriteString(v4SigningAlgorithmPrefix)
 	b.WriteString(data.algorithm.String())
 	b.WriteString(data.algorithmSuffix.String())
 	b.WriteByte(lf)

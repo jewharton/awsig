@@ -99,7 +99,7 @@ type V4Reader struct {
 	trailingHeader  bool
 	trailingSumAlgo checksumAlgorithm
 
-	signingAlgo     signingAlgorithm
+	signingAlgo     v4SigningAlgorithm
 	dateTime        string
 	scope           scope
 	secretAccessKey string
@@ -327,7 +327,7 @@ func (r *V4Reader) readChunkTrailer(buf []byte) error {
 			return err
 		}
 
-		signature := calculateSignature(signatureData{
+		signature := calculateSignatureV4(signatureV4Data{
 			algorithm:       r.signingAlgo,
 			algorithmSuffix: algorithmSuffixTrailer,
 			dateTime:        r.dateTime,
@@ -347,8 +347,8 @@ func (r *V4Reader) readChunkTrailer(buf []byte) error {
 	return nil
 }
 
-func (r *V4Reader) currentChunkSignatureData() signatureData {
-	return signatureData{
+func (r *V4Reader) currentChunkSignatureData() signatureV4Data {
+	return signatureV4Data{
 		algorithm:       r.signingAlgo,
 		algorithmSuffix: algorithmSuffixPayload,
 		dateTime:        r.dateTime,
@@ -364,7 +364,7 @@ func (r *V4Reader) close(buf []byte) error {
 	}
 
 	if !r.unsigned {
-		signature := calculateSignature(r.currentChunkSignatureData(), r.secretAccessKey)
+		signature := calculateSignatureV4(r.currentChunkSignatureData(), r.secretAccessKey)
 		if !r.chunkExpectedSignature.compare(signature) {
 			return ErrSignatureDoesNotMatch
 		}
@@ -444,7 +444,7 @@ func (r *V4Reader) Read(p []byte) (n int, err error) {
 	if r.chunkBytesLeft -= n; r.chunkBytesLeft == 0 {
 		r.chunkCount++
 		if !r.unsigned {
-			signature := calculateSignature(r.currentChunkSignatureData(), r.secretAccessKey)
+			signature := calculateSignatureV4(r.currentChunkSignatureData(), r.secretAccessKey)
 			if !r.chunkExpectedSignature.compare(signature) {
 				return n, ErrSignatureDoesNotMatch
 			}
@@ -496,15 +496,15 @@ func (v4 *V4) parseTime(main, alt string) (string, time.Time, error) {
 	return main, parsed, nil
 }
 
-func (v4 *V4) parseSigningAlgo(rawAlgorithm string) (signingAlgorithm, error) {
-	if !strings.HasPrefix(rawAlgorithm, signingAlgorithmPrefix) {
+func (v4 *V4) parseSigningAlgo(rawAlgorithm string) (v4SigningAlgorithm, error) {
+	if !strings.HasPrefix(rawAlgorithm, v4SigningAlgorithmPrefix) {
 		return 0, nestError(
 			ErrUnsupportedSignature,
 			"the %s header does not contain a valid signing algorithm", headerAuthorization,
 		)
 	}
 
-	switch rawAlgorithm[len(signingAlgorithmPrefix):] {
+	switch rawAlgorithm[len(v4SigningAlgorithmPrefix):] {
 	case algorithmHMACSHA256.String():
 		return algorithmHMACSHA256, nil
 	case algorithmECDSAP256SHA256.String():
@@ -685,7 +685,7 @@ func (v4 *V4) parseSignature(rawSignature string) (signatureV4, error) {
 }
 
 type parsedAuthorization struct {
-	signingAlgo   signingAlgorithm
+	signingAlgo   v4SigningAlgorithm
 	credential    parsedCredential
 	signedHeaders []string
 	signature     signatureV4
@@ -740,7 +740,7 @@ func (v4 *V4) parseAuthorization(rawAuthorization string, expectedDate time.Time
 type parsedXAmzContentSHA256 struct {
 	unsigned             bool
 	streaming            bool
-	signingAlgo          signingAlgorithm
+	signingAlgo          v4SigningAlgorithm
 	trailer              bool
 	decodedContentLength int
 }
@@ -1044,7 +1044,7 @@ func (v4 *V4) verify(r *http.Request) (readerOptions, error) {
 
 	canonicalRequestHash := v4.canonicalRequestHash(r, authorization.signedHeaders, rawXAmzContentSHA256)
 
-	signature := calculateSignature(signatureData{
+	signature := calculateSignatureV4(signatureV4Data{
 		algorithm:       authorization.signingAlgo,
 		algorithmSuffix: algorithmSuffixNone,
 		dateTime:        rawDate,
