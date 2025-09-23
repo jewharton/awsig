@@ -188,4 +188,15 @@ func TestV4(t *testing.T) {
 			assert.Equal(t, bytes.Repeat([]byte{'a'}, 17*1024), b)
 		})
 	})
+	t.Run("presigned", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20130524T000000Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404", nil)
+
+		r, err := v4.Verify(req)
+		assert.NoError(t, err)
+
+		p := make([]byte, 32*1024)
+		n, err := r.Read(p)
+		assert.That(t, n == 0)
+		assert.That(t, errors.Is(err, io.EOF))
+	})
 }

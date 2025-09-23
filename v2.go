@@ -226,7 +226,7 @@ func (v2 *V2) verify(r *http.Request, virtualHostedBucket string) (v2ReaderOptio
 		)
 	}
 
-	if skew := v2.now().Sub(parsedDateTime); skew < -15*time.Minute || skew > 15*time.Minute {
+	if timeSkewExceeded(v2.now, parsedDateTime, maxRequestTimeSkew) {
 		return v2ReaderOptions{}, ErrRequestTimeTooSkewed
 	}
 
@@ -268,8 +268,8 @@ func (v2 *V2) verifyPresigned(r *http.Request, query url.Values, virtualHostedBu
 		)
 	}
 
-	if v2.now().After(time.Unix(expires, 0)) {
-		return v2ReaderOptions{}, ErrRequestTimeTooSkewed
+	if timeOutOfBounds(v2.now, time.Time{}, time.Unix(expires, 0)) {
+		return v2ReaderOptions{}, ErrAccessDenied
 	}
 
 	signature, err := newSignatureV2FromEncoded(query.Get(querySignature))

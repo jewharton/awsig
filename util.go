@@ -12,20 +12,21 @@ import (
 )
 
 var (
-	ErrAuthorizationHeaderMalformed = errors.New("the authorization header that you provided is not valid")
-	ErrEntityTooLarge               = errors.New("your proposed upload exceeds the maximum allowed object size")
-	ErrEntityTooSmall               = errors.New("your proposed upload is smaller than the minimum allowed object size")
-	ErrIncompleteBody               = errors.New("you did not provide the number of bytes specified by the Content-Length HTTP header")
-	ErrInvalidArgument              = errors.New("invalid argument")
-	ErrInvalidDigest                = errors.New("the Content-MD5 or checksum value that you specified is not valid")
-	ErrInvalidRequest               = errors.New("invalid request")
-	ErrInvalidSignature             = errors.New("the request signature that the server calculated does not match the signature that you provided")
-	ErrMissingAuthenticationToken   = errors.New("the request was not signed")
-	ErrMissingContentLength         = errors.New("you must provide the Content-Length HTTP header")
-	ErrMissingSecurityHeader        = errors.New("your request is missing a required header")
-	ErrRequestTimeTooSkewed         = errors.New("the difference between the request time and the server's time is too large")
-	ErrSignatureDoesNotMatch        = errors.New("the request signature that the server calculated does not match the signature that you provided")
-	ErrUnsupportedSignature         = errors.New("the provided request is signed with an unsupported STS Token version or the signature version is not supported")
+	ErrAuthorizationHeaderMalformed      = errors.New("the authorization header that you provided is not valid")
+	ErrAuthorizationQueryParametersError = errors.New("the authorization query parameters that you provided are not valid")
+	ErrEntityTooLarge                    = errors.New("your proposed upload exceeds the maximum allowed object size")
+	ErrEntityTooSmall                    = errors.New("your proposed upload is smaller than the minimum allowed object size")
+	ErrIncompleteBody                    = errors.New("you did not provide the number of bytes specified by the Content-Length HTTP header")
+	ErrInvalidArgument                   = errors.New("invalid argument")
+	ErrInvalidDigest                     = errors.New("the Content-MD5 or checksum value that you specified is not valid")
+	ErrInvalidRequest                    = errors.New("invalid request")
+	ErrInvalidSignature                  = errors.New("the request signature that the server calculated does not match the signature that you provided")
+	ErrMissingAuthenticationToken        = errors.New("the request was not signed")
+	ErrMissingContentLength              = errors.New("you must provide the Content-Length HTTP header")
+	ErrMissingSecurityHeader             = errors.New("your request is missing a required header")
+	ErrRequestTimeTooSkewed              = errors.New("the difference between the request time and the server's time is too large")
+	ErrSignatureDoesNotMatch             = errors.New("the request signature that the server calculated does not match the signature that you provided")
+	ErrUnsupportedSignature              = errors.New("the provided request is signed with an unsupported STS Token version or the signature version is not supported")
 
 	ErrAccessDenied       = errors.New("access denied")
 	ErrInvalidAccessKeyID = errors.New("the AWS access key ID that you provided does not exist in our records")
@@ -51,6 +52,8 @@ const (
 
 	timeFormatISO8601  = "20060102T150405Z"
 	timeFormatYYYYMMDD = "20060102"
+
+	maxRequestTimeSkew = 15 * time.Minute
 )
 
 var httpTimeFormats = []string{
@@ -103,6 +106,20 @@ func parseTimeWithFormats(value string, formats []string) (time.Time, error) {
 		}
 	}
 	return t, err
+}
+
+func timeOutOfBounds(now func() time.Time, b1, b2 time.Time) bool { // TODO(amwolff): write a unit test
+	if b1.After(b2) {
+		b1, b2 = b2, b1
+	}
+	if n := now(); n.Before(b1) || n.After(b2) {
+		return true
+	}
+	return false
+}
+
+func timeSkewExceeded(now func() time.Time, t time.Time, skew time.Duration) bool { // TODO(amwolff): write a unit test
+	return timeOutOfBounds(now, t.Add(-skew), t.Add(skew))
 }
 
 func uriEncode(value string, path bool) string {

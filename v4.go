@@ -8,6 +8,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -37,6 +38,7 @@ const (
 	queryXAmzCredential    = "X-Amz-Credential"
 	queryXAmzDate          = "X-Amz-Date"
 	queryXAmzExpires       = "X-Amz-Expires"
+	queryXAmzSecurityToken = "X-Amz-Security-Token"
 	queryXAmzSignedHeaders = "X-Amz-SignedHeaders"
 	queryXAmzSignature     = "X-Amz-Signature"
 
@@ -75,7 +77,7 @@ type V4Reader struct {
 	chunkExpectedSignature signatureV4
 }
 
-type readerOptions struct {
+type v4ReaderOptions struct {
 	dateTime        string
 	scope           scope
 	parsedOptions   parsedXAmzContentSHA256
@@ -84,7 +86,7 @@ type readerOptions struct {
 	seedSignature   signatureV4
 }
 
-func newV4Reader(r io.Reader, data readerOptions) *V4Reader {
+func newV4Reader(r io.Reader, data v4ReaderOptions) *V4Reader {
 	var (
 		ir          *integrityReader
 		chunkSHA256 hash.Hash
@@ -461,7 +463,7 @@ func (v4 *V4) parseSigningAlgo(rawAlgorithm string) (v4SigningAlgorithm, error) 
 	if !strings.HasPrefix(rawAlgorithm, v4SigningAlgorithmPrefix) {
 		return 0, nestError(
 			ErrUnsupportedSignature,
-			"the %s header does not contain a valid signing algorithm", headerAuthorization,
+			"the Algorithm parameter does not contain a valid signing algorithm",
 		)
 	}
 
@@ -476,7 +478,7 @@ func (v4 *V4) parseSigningAlgo(rawAlgorithm string) (v4SigningAlgorithm, error) 
 	default:
 		return 0, nestError(
 			ErrUnsupportedSignature,
-			"the %s header does not contain a valid signing algorithm", headerAuthorization,
+			"the Algorithm parameter does not contain a valid signing algorithm",
 		)
 	}
 }
@@ -486,15 +488,18 @@ type parsedCredential struct {
 	scope       scope
 }
 
-func (v4 *V4) parseCredential(rawCredential string, expectedDate time.Time) (parsedCredential, error) {
-	if !strings.HasPrefix(rawCredential, v4AuthorizationHeaderCredentialPrefix) {
-		return parsedCredential{}, nestError(
-			ErrAuthorizationHeaderMalformed,
-			"the Credential parameter is missing",
-		)
+func (v4 *V4) parseCredential(rawCredential string, expectedDate time.Time, skipPrefixCheck bool) (parsedCredential, error) {
+	if !skipPrefixCheck {
+		if !strings.HasPrefix(rawCredential, v4AuthorizationHeaderCredentialPrefix) {
+			return parsedCredential{}, nestError(
+				ErrAuthorizationHeaderMalformed,
+				"the Credential parameter is missing",
+			)
+		}
+		rawCredential = rawCredential[len(v4AuthorizationHeaderCredentialPrefix):]
 	}
 
-	parts := strings.SplitN(rawCredential[len(v4AuthorizationHeaderCredentialPrefix):], "/", 5)
+	parts := strings.SplitN(rawCredential, "/", 5)
 
 	if len(parts) != 5 {
 		return parsedCredential{}, nestError(
@@ -551,14 +556,16 @@ func (v4 *V4) parseCredential(rawCredential string, expectedDate time.Time) (par
 	}, nil
 }
 
-func (v4 *V4) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.Header) ([]string, error) {
-	if !strings.HasPrefix(rawSignedHeaders, v4AuthorizationHeaderSignedHeadersPrefix) {
-		return nil, nestError(
-			ErrAuthorizationHeaderMalformed,
-			"the SignedHeaders parameter is missing",
-		)
+func (v4 *V4) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.Header, skipPrefixCheck bool) ([]string, error) {
+	if !skipPrefixCheck {
+		if !strings.HasPrefix(rawSignedHeaders, v4AuthorizationHeaderSignedHeadersPrefix) {
+			return nil, nestError(
+				ErrAuthorizationHeaderMalformed,
+				"the SignedHeaders parameter is missing",
+			)
+		}
+		rawSignedHeaders = rawSignedHeaders[len(v4AuthorizationHeaderSignedHeadersPrefix):]
 	}
-	rawSignedHeaders = rawSignedHeaders[len(v4AuthorizationHeaderSignedHeadersPrefix):]
 
 	signedHeaders := strings.Split(rawSignedHeaders, ";")
 	signedHeadersLookup := make(map[string]struct{})
@@ -625,14 +632,16 @@ func (v4 *V4) parseSignedHeaders(rawSignedHeaders string, actualHeaders http.Hea
 	return signedHeaders, nil
 }
 
-func (v4 *V4) parseSignature(rawSignature string) (signatureV4, error) {
-	if !strings.HasPrefix(rawSignature, v4AuthorizationHeaderSignaturePrefix) {
-		return nil, nestError(
-			ErrAuthorizationHeaderMalformed,
-			"the Signature parameter is missing",
-		)
+func (v4 *V4) parseSignature(rawSignature string, skipPrefixCheck bool) (signatureV4, error) {
+	if !skipPrefixCheck {
+		if !strings.HasPrefix(rawSignature, v4AuthorizationHeaderSignaturePrefix) {
+			return nil, nestError(
+				ErrAuthorizationHeaderMalformed,
+				"the Signature parameter is missing",
+			)
+		}
+		rawSignature = rawSignature[len(v4AuthorizationHeaderSignaturePrefix):]
 	}
-	rawSignature = rawSignature[len(v4AuthorizationHeaderSignaturePrefix):]
 
 	signature, err := newSignatureV4FromEncoded([]byte(rawSignature))
 	if err != nil {
@@ -675,17 +684,46 @@ func (v4 *V4) parseAuthorization(rawAuthorization string, expectedDate time.Time
 		)
 	}
 
-	credential, err := v4.parseCredential(pairs[0], expectedDate)
+	credential, err := v4.parseCredential(pairs[0], expectedDate, false)
 	if err != nil {
 		return parsedAuthorization{}, err
 	}
 
-	signedHeaders, err := v4.parseSignedHeaders(pairs[1], headers)
+	signedHeaders, err := v4.parseSignedHeaders(pairs[1], headers, false)
 	if err != nil {
 		return parsedAuthorization{}, err
 	}
 
-	signature, err := v4.parseSignature(pairs[2])
+	signature, err := v4.parseSignature(pairs[2], false)
+	if err != nil {
+		return parsedAuthorization{}, err
+	}
+
+	return parsedAuthorization{
+		signingAlgo:   signingAlgo,
+		credential:    credential,
+		signedHeaders: signedHeaders,
+		signature:     signature,
+	}, nil
+}
+
+func (v4 *V4) parseAuthorizationFromQuery(query url.Values, expectedDate time.Time, headers http.Header) (parsedAuthorization, error) {
+	signingAlgo, err := v4.parseSigningAlgo(query.Get(queryXAmzAlgorithm))
+	if err != nil {
+		return parsedAuthorization{}, err
+	}
+
+	credential, err := v4.parseCredential(query.Get(queryXAmzCredential), expectedDate, true)
+	if err != nil {
+		return parsedAuthorization{}, err
+	}
+
+	signedHeaders, err := v4.parseSignedHeaders(query.Get(queryXAmzSignedHeaders), headers, true)
+	if err != nil {
+		return parsedAuthorization{}, err
+	}
+
+	signature, err := v4.parseSignature(query.Get(queryXAmzSignature), true)
 	if err != nil {
 		return parsedAuthorization{}, err
 	}
@@ -901,7 +939,7 @@ func (v4 *V4) determineIntegrity(rawXAmzContentSHA256 string, options parsedXAmz
 	return ret, nil
 }
 
-func (v4 *V4) canonicalRequestHash(r *http.Request, signedHeaders []string, hashedPayload string) []byte {
+func (v4 *V4) canonicalRequestHash(r *http.Request, query url.Values, signedHeaders []string, hashedPayload string) []byte {
 	b := newHashBuilder(sha256.New)
 
 	// http verb
@@ -911,7 +949,6 @@ func (v4 *V4) canonicalRequestHash(r *http.Request, signedHeaders []string, hash
 	b.WriteString(uriEncode(r.URL.Path, true))
 	b.WriteByte(lf)
 	// canonical query string
-	query := r.URL.Query()
 	queryParams := slices.Collect(maps.Keys(query))
 	slices.Sort(queryParams)
 	for i, p := range queryParams {
@@ -962,27 +999,27 @@ func (v4 *V4) canonicalRequestHash(r *http.Request, signedHeaders []string, hash
 	return b.Sum()
 }
 
-func (v4 *V4) verify(r *http.Request) (readerOptions, error) {
+func (v4 *V4) verify(r *http.Request) (v4ReaderOptions, error) {
 	rawDate, parsedDateTime, err := v4.parseTime(r.Header.Get(headerXAmzDate), r.Header.Get(headerDate))
 	if err != nil {
-		return readerOptions{}, nestError(
+		return v4ReaderOptions{}, nestError(
 			ErrInvalidRequest,
 			"the %s or %s header does not contain a valid date: %w", headerXAmzDate, headerDate, err,
 		)
 	}
 
-	if skew := v4.now().Sub(parsedDateTime); skew < -15*time.Minute || skew > 15*time.Minute {
-		return readerOptions{}, ErrRequestTimeTooSkewed
+	if timeSkewExceeded(v4.now, parsedDateTime, maxRequestTimeSkew) {
+		return v4ReaderOptions{}, ErrRequestTimeTooSkewed
 	}
 
 	authorization, err := v4.parseAuthorization(r.Header.Get(headerAuthorization), parsedDateTime, r.Header)
 	if err != nil {
-		return readerOptions{}, err
+		return v4ReaderOptions{}, err
 	}
 
 	rawXAmzContentSHA256 := r.Header.Get(headerXAmzContentSha256)
 	if rawXAmzContentSHA256 == "" {
-		return readerOptions{}, nestError(
+		return v4ReaderOptions{}, nestError(
 			ErrMissingSecurityHeader,
 			"the %s header is missing", headerXAmzContentSha256,
 		)
@@ -990,20 +1027,20 @@ func (v4 *V4) verify(r *http.Request) (readerOptions, error) {
 
 	options, err := v4.parseXAmzContentSHA256(rawXAmzContentSHA256, r.Header)
 	if err != nil {
-		return readerOptions{}, err
+		return v4ReaderOptions{}, err
 	}
 
 	integrity, err := v4.determineIntegrity(rawXAmzContentSHA256, options, r.Header)
 	if err != nil {
-		return readerOptions{}, err
+		return v4ReaderOptions{}, err
 	}
 
 	secretAccessKey, err := v4.provider.Provide(r.Context(), authorization.credential.accessKeyID)
 	if err != nil {
-		return readerOptions{}, err
+		return v4ReaderOptions{}, err
 	}
 
-	canonicalRequestHash := v4.canonicalRequestHash(r, authorization.signedHeaders, rawXAmzContentSHA256)
+	canonicalRequestHash := v4.canonicalRequestHash(r, r.URL.Query(), authorization.signedHeaders, rawXAmzContentSHA256)
 
 	signature := calculateSignatureV4(signatureV4Data{
 		algorithm:       authorization.signingAlgo,
@@ -1015,10 +1052,10 @@ func (v4 *V4) verify(r *http.Request) (readerOptions, error) {
 	}, secretAccessKey)
 
 	if !signature.compare(authorization.signature) {
-		return readerOptions{}, ErrSignatureDoesNotMatch
+		return v4ReaderOptions{}, ErrSignatureDoesNotMatch
 	}
 
-	return readerOptions{
+	return v4ReaderOptions{
 		dateTime:        rawDate,
 		scope:           authorization.credential.scope,
 		parsedOptions:   options,
@@ -1028,11 +1065,90 @@ func (v4 *V4) verify(r *http.Request) (readerOptions, error) {
 	}, nil
 }
 
-func (v4 *V4) verifyPresigned(r *http.Request) (readerOptions, error) {
-	return readerOptions{}, nestError(
-		ErrNotImplemented,
-		"verifying presigned requests is not implemented yet",
-	)
+func (v4 *V4) verifyPresigned(r *http.Request, query url.Values) (v4ReaderOptions, error) {
+	expires, err := strconv.ParseInt(query.Get(queryXAmzExpires), 10, 64)
+	if err != nil {
+		return v4ReaderOptions{}, nestError(
+			ErrInvalidRequest,
+			"the %s query parameter does not contain a valid integer: %w", queryXAmzExpires, err,
+		)
+	}
+
+	if expires < 0 {
+		return v4ReaderOptions{}, nestError(
+			ErrAuthorizationQueryParametersError,
+			"the %s query parameter is negative", queryXAmzExpires,
+		)
+	} else if expires > 604800 {
+		return v4ReaderOptions{}, nestError(
+			ErrAuthorizationQueryParametersError,
+			"the %s query parameter exceeds the maximum of 604800 seconds (7 days)", queryXAmzExpires,
+		)
+	}
+
+	rawDate := query.Get(queryXAmzDate)
+
+	parsedDateTime, err := parseTimeWithFormats(rawDate, []string{timeFormatISO8601})
+	if err != nil {
+		return v4ReaderOptions{}, nestError(
+			ErrInvalidRequest,
+			"the %s query parameter does not contain a valid date: %w", queryXAmzDate, err,
+		)
+	}
+
+	if v4.now().Before(parsedDateTime) {
+		return v4ReaderOptions{}, nestError(
+			ErrAccessDenied,
+			"the request is not yet valid",
+		)
+	} else if v4.now().After(parsedDateTime.Add(time.Duration(expires) * time.Second)) {
+		return v4ReaderOptions{}, nestError(
+			ErrAccessDenied,
+			"the request has expired",
+		)
+	}
+
+	authorization, err := v4.parseAuthorizationFromQuery(query, parsedDateTime, r.Header)
+	if err != nil {
+		return v4ReaderOptions{}, err
+	}
+
+	rawXAmzContentSHA256, options := unsignedPayload, parsedXAmzContentSHA256{unsigned: true}
+
+	integrity, err := v4.determineIntegrity(rawXAmzContentSHA256, options, r.Header)
+	if err != nil {
+		return v4ReaderOptions{}, err
+	}
+
+	secretAccessKey, err := v4.provider.Provide(r.Context(), authorization.credential.accessKeyID)
+	if err != nil {
+		return v4ReaderOptions{}, err
+	}
+
+	query.Del(queryXAmzSignature)
+	canonicalRequestHash := v4.canonicalRequestHash(r, query, authorization.signedHeaders, rawXAmzContentSHA256)
+
+	signature := calculateSignatureV4(signatureV4Data{
+		algorithm:       authorization.signingAlgo,
+		algorithmSuffix: algorithmSuffixNone,
+		dateTime:        rawDate,
+		scope:           authorization.credential.scope,
+		previous:        nil,
+		digest:          canonicalRequestHash,
+	}, secretAccessKey)
+
+	if !signature.compare(authorization.signature) {
+		return v4ReaderOptions{}, ErrSignatureDoesNotMatch
+	}
+
+	return v4ReaderOptions{
+		dateTime:        rawDate,
+		scope:           authorization.credential.scope,
+		parsedOptions:   options,
+		parsedIntegrity: integrity,
+		secretAccessKey: secretAccessKey,
+		seedSignature:   signature,
+	}, nil
 }
 
 func (v4 *V4) Verify(r *http.Request) (*V4Reader, error) {
@@ -1047,8 +1163,8 @@ func (v4 *V4) Verify(r *http.Request) (*V4Reader, error) {
 			return nil, err
 		}
 		return newV4Reader(r.Body, data), nil
-	} else if r.URL.Query().Has(queryXAmzAlgorithm) {
-		data, err := v4.verifyPresigned(r)
+	} else if query := r.URL.Query(); query.Has(queryXAmzAlgorithm) {
+		data, err := v4.verifyPresigned(r, query)
 		if err != nil {
 			return nil, err
 		}
