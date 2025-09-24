@@ -7,6 +7,7 @@ import (
 	"hash"
 	"io"
 	"maps"
+	"mime"
 	"net/http"
 	"net/url"
 	"slices"
@@ -1151,12 +1152,29 @@ func (v4 *V4) verifyPresigned(r *http.Request, query url.Values) (v4ReaderOption
 	}, nil
 }
 
+func (v4 *V4) verifyPost(form PostForm) (v4ReaderOptions, error) {
+	return v4ReaderOptions{}, nil
+}
+
 func (v4 *V4) Verify(r *http.Request) (*V4Reader, error) {
-	if r.Method == http.MethodPost {
-		return nil, nestError(
-			ErrNotImplemented,
-			"authenticating HTTP POST requests is not implemented yet",
-		)
+	typ, params, err := mime.ParseMediaType(r.Header.Get(headerContentType))
+	if err != nil {
+		typ = ""
+	}
+
+	if r.Method == http.MethodPost && typ == "multipart/form-data" {
+		file, form, err := parseMultipartFormUntilFile(r.Body, params["boundary"])
+		if err != nil {
+			return nil, nestError(
+				ErrInvalidRequest,
+				"unable to parse multipart form data: %w", err,
+			)
+		}
+		data, err := v4.verifyPost(form)
+		if err != nil {
+			return nil, err
+		}
+		return newV4Reader(file, data), nil
 	} else if r.Header.Get(headerAuthorization) != "" {
 		data, err := v4.verify(r)
 		if err != nil {
@@ -1170,5 +1188,6 @@ func (v4 *V4) Verify(r *http.Request) (*V4Reader, error) {
 		}
 		return newV4Reader(r.Body, data), nil
 	}
+
 	return nil, ErrMissingAuthenticationToken
 }

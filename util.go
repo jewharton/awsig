@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strings"
 	"time"
@@ -158,4 +161,97 @@ func newHashBuilder(h func() hash.Hash) *hashBuilder {
 	return &hashBuilder{
 		h: h(),
 	}
+}
+
+type PostFormElement struct {
+	Value   string
+	Headers textproto.MIMEHeader
+}
+
+type PostForm map[string][]PostFormElement
+
+func (f PostForm) FileName() string {
+	return f["file"][0].Value
+}
+
+func (f PostForm) Add(key, value string, headers textproto.MIMEHeader) {
+	k := textproto.CanonicalMIMEHeaderKey(key)
+	f[k] = append(f[k], PostFormElement{
+		Value:   value,
+		Headers: headers,
+	})
+}
+
+func (f PostForm) Set(key string, value string, headers textproto.MIMEHeader) {
+	k := textproto.CanonicalMIMEHeaderKey(key)
+	f[k] = []PostFormElement{{
+		Value:   value,
+		Headers: headers,
+	}}
+}
+
+func (f PostForm) Get(key string) (string, textproto.MIMEHeader) {
+	if f == nil {
+		return "", nil
+	}
+	v := f[textproto.CanonicalMIMEHeaderKey(key)]
+	if len(v) == 0 {
+		return "", nil
+	}
+	return v[0].Value, v[0].Headers
+}
+
+func (f PostForm) Values(key string) ([]string, []textproto.MIMEHeader) {
+	if f == nil {
+		return nil, nil
+	}
+	v := f[textproto.CanonicalMIMEHeaderKey(key)]
+	vals := make([]string, 0, len(v))
+	hdrs := make([]textproto.MIMEHeader, 0, len(v))
+	for _, e := range v {
+		vals = append(vals, e.Value)
+		hdrs = append(hdrs, e.Headers)
+	}
+	return vals, hdrs
+}
+
+func parseMultipartFormUntilFile(r io.Reader, boundary string) (io.ReadCloser, PostForm, error) {
+	if boundary == "" {
+		return nil, nil, http.ErrMissingBoundary
+	}
+
+	mr := multipart.NewReader(r, boundary) // TODO(amwolff): limit the size of the parsed text parts to 20 KB
+
+	form := make(PostForm)
+	for {
+		part, err := mr.NextPart()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, PostForm{}, err
+		}
+
+		name := part.FormName()
+
+		if name == "file" {
+			form.Set(name, part.FileName(), part.Header)
+			return part, form, nil
+		}
+
+		b, err := io.ReadAll(part)
+		if err != nil {
+			if errClose := part.Close(); errClose != nil {
+				return nil, PostForm{}, errors.Join(err, errClose)
+			}
+			return nil, PostForm{}, err
+		}
+		form.Add(name, string(b), part.Header)
+
+		if err = part.Close(); err != nil {
+			return nil, PostForm{}, err
+		}
+	}
+
+	return nil, PostForm{}, http.ErrMissingFile
 }
