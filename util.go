@@ -215,12 +215,52 @@ func (f PostForm) Values(key string) ([]string, []textproto.MIMEHeader) {
 	return vals, hdrs
 }
 
+var errLimited = errors.New("limited reader: limit reached")
+
+func limitReader(r io.Reader, n int64) *limitedReader {
+	return &limitedReader{
+		r:       r,
+		n:       n,
+		enabled: true,
+	}
+}
+
+type limitedReader struct {
+	r       io.Reader
+	n       int64
+	enabled bool
+}
+
+func (l *limitedReader) Read(p []byte) (n int, err error) {
+	if !l.enabled {
+		return l.r.Read(p)
+	}
+
+	if l.n <= 0 {
+		return 0, errors.Join(io.EOF, errLimited)
+	}
+
+	if int64(len(p)) > l.n {
+		p = p[0:l.n]
+	}
+
+	n, err = l.r.Read(p)
+	l.n -= int64(n)
+
+	return n, err
+}
+
+func (l *limitedReader) toggle() {
+	l.enabled = !l.enabled
+}
+
 func parseMultipartFormUntilFile(r io.Reader, boundary string) (io.ReadCloser, PostForm, error) {
 	if boundary == "" {
 		return nil, nil, http.ErrMissingBoundary
 	}
 
-	mr := multipart.NewReader(r, boundary) // TODO(amwolff): limit the size of the parsed text parts to 20 KB
+	lr := limitReader(r, 20000) // the 20KB limit is mentioned in https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-HTTPPOSTForms.html
+	mr := multipart.NewReader(lr, boundary)
 
 	form := make(PostForm)
 	for {
@@ -235,14 +275,18 @@ func parseMultipartFormUntilFile(r io.Reader, boundary string) (io.ReadCloser, P
 		name := part.FormName()
 
 		if name == "file" {
+			lr.toggle() // stop limiting the reader as we reached the file part
 			form.Set(name, part.FileName(), part.Header)
 			return part, form, nil
 		}
 
 		b, err := io.ReadAll(part)
 		if err != nil {
+			if errors.Is(err, errLimited) {
+				err = errors.New("POST too large")
+			}
 			if errClose := part.Close(); errClose != nil {
-				return nil, PostForm{}, errors.Join(err, errClose)
+				err = errors.Join(err, errClose)
 			}
 			return nil, PostForm{}, err
 		}
