@@ -66,6 +66,8 @@ var httpTimeFormats = []string{
 	time.ANSIC,
 }
 
+var errMessageTooLarge = errors.New("message too large")
+
 type CredentialsProvider interface {
 	Provide(ctx context.Context, accessKeyID string) (secretAccessKey string, _ error)
 }
@@ -215,7 +217,7 @@ func (f PostForm) Values(key string) ([]string, []textproto.MIMEHeader) {
 	return vals, hdrs
 }
 
-var errLimited = errors.New("limited reader: limit reached")
+var errLimitReached = errors.New("limitedReader: limit reached")
 
 func limitReader(r io.Reader, n int64) *limitedReader {
 	return &limitedReader{
@@ -235,9 +237,8 @@ func (l *limitedReader) Read(p []byte) (n int, err error) {
 	if !l.enabled {
 		return l.r.Read(p)
 	}
-
 	if l.n <= 0 {
-		return 0, errors.Join(io.EOF, errLimited)
+		return 0, errors.Join(io.EOF, errLimitReached)
 	}
 
 	if int64(len(p)) > l.n {
@@ -266,7 +267,9 @@ func parseMultipartFormUntilFile(r io.Reader, boundary string) (io.ReadCloser, P
 	for {
 		part, err := mr.NextPart()
 		if err != nil {
-			if errors.Is(err, io.EOF) {
+			if errors.Is(err, errLimitReached) {
+				err = errMessageTooLarge
+			} else if errors.Is(err, io.EOF) {
 				break
 			}
 			return nil, PostForm{}, err
@@ -282,8 +285,8 @@ func parseMultipartFormUntilFile(r io.Reader, boundary string) (io.ReadCloser, P
 
 		b, err := io.ReadAll(part)
 		if err != nil {
-			if errors.Is(err, errLimited) {
-				err = errors.New("POST too large")
+			if errors.Is(err, errLimitReached) {
+				err = errMessageTooLarge
 			}
 			if errClose := part.Close(); errClose != nil {
 				err = errors.Join(err, errClose)
@@ -297,5 +300,5 @@ func parseMultipartFormUntilFile(r io.Reader, boundary string) (io.ReadCloser, P
 		}
 	}
 
-	return nil, PostForm{}, http.ErrMissingFile
+	return nil, PostForm{}, errors.New("missing file part in multipart form data")
 }
