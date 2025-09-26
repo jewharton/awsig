@@ -2,6 +2,8 @@ package awsig
 
 import (
 	"bytes"
+	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"errors"
 	"hash"
@@ -1007,10 +1009,89 @@ func (v4 *V4) canonicalRequestHash(r *http.Request, query url.Values, signedHead
 	return b.Sum()
 }
 
-func (v4 *V4) verifyPost(form PostForm) (v4ReaderOptions, error) {
+func (v4 *V4) calculatePostSignature(data signatureV4Data, secretAccessKey string) signatureV4 {
+	if data.algorithm == algorithmECDSAP256SHA256 { // this won't happen; check anyway
+		panic("not implemented")
+	}
+
+	key := signingKeyHMACSHA256(secretAccessKey, data.scope.date, data.scope.region, data.scope.service)
+
+	h := hmac.New(sha256.New, key)
+	h.Write(data.digest)
+
+	return signatureV4(h.Sum(nil))
+}
+
+func (v4 *V4) verifyPost(ctx context.Context, form PostForm) (v4ReaderOptions, error) {
+	rawDate, _ := form.Get(queryXAmzDate)
+
+	parsedDateTime, err := parseTimeWithFormats(rawDate, []string{timeFormatISO8601})
+	if err != nil {
+		return v4ReaderOptions{}, nestError(
+			ErrInvalidRequest,
+			"the %s form field does not contain a valid date: %w", queryXAmzDate, err,
+		)
+	}
+
+	if timeSkewExceeded(v4.now, parsedDateTime, maxRequestTimeSkew) {
+		return v4ReaderOptions{}, ErrRequestTimeTooSkewed
+	}
+
+	rawAlgorithm, _ := form.Get(queryXAmzAlgorithm)
+	signingAlgo, err := v4.parseSigningAlgo(rawAlgorithm)
+	if err != nil {
+		return v4ReaderOptions{}, err
+	}
+
+	rawCredential, _ := form.Get(queryXAmzCredential)
+	credential, err := v4.parseCredential(rawCredential, parsedDateTime, true)
+	if err != nil {
+		return v4ReaderOptions{}, err
+	}
+
+	rawSignature, _ := form.Get(queryXAmzSignature)
+	signature, err := v4.parseSignature(rawSignature, true)
+	if err != nil {
+		return v4ReaderOptions{}, err
+	}
+
+	policy, _ := form.Get(formNamePolicy)
+	if policy == "" {
+		return v4ReaderOptions{}, nestError(
+			ErrInvalidRequest,
+			"the %s form field is missing", formNamePolicy,
+		)
+	}
+
+	integrity, err := determinePostIntegrity(form)
+	if err != nil {
+		return v4ReaderOptions{}, err
+	}
+
+	secretAccessKey, err := v4.provider.Provide(ctx, credential.accessKeyID)
+	if err != nil {
+		return v4ReaderOptions{}, err
+	}
+
+	if !v4.calculatePostSignature(signatureV4Data{
+		algorithm:       signingAlgo,
+		algorithmSuffix: algorithmSuffixNone,
+		dateTime:        rawDate,
+		scope:           credential.scope,
+		previous:        nil,
+		digest:          []byte(policy),
+	}, secretAccessKey).compare(signature) {
+		return v4ReaderOptions{}, ErrSignatureDoesNotMatch
+	}
+
 	return v4ReaderOptions{
-		form: form,
-		// …
+		form:            form,
+		dateTime:        rawDate,
+		scope:           credential.scope,
+		parsedOptions:   parsedXAmzContentSHA256{unsigned: true},
+		parsedIntegrity: integrity,
+		secretAccessKey: secretAccessKey,
+		seedSignature:   signature,
 	}, nil
 }
 
@@ -1180,7 +1261,7 @@ func (v4 *V4) Verify(r *http.Request) (*V4Reader, error) {
 				"unable to parse multipart form data: %w", err,
 			)
 		}
-		data, err := v4.verifyPost(form)
+		data, err := v4.verifyPost(r.Context(), form)
 		if err != nil {
 			return nil, err
 		}

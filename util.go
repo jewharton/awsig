@@ -53,6 +53,9 @@ const (
 	headerXAmzDate                 = xAmzHeaderPrefix + "date"
 	headerXAmzSdkChecksumAlgorithm = xAmzHeaderPrefix + "sdk-checksum-algorithm"
 
+	formNamePolicy                = "Policy"
+	formNameXAmzChecksumAlgorithm = xAmzHeaderPrefix + "checksum-algorithm"
+
 	timeFormatISO8601  = "20060102T150405Z"
 	timeFormatYYYYMMDD = "20060102"
 
@@ -302,4 +305,66 @@ func parseMultipartFormUntilFile(r io.Reader, boundary string) (io.ReadCloser, P
 	}
 
 	return nil, PostForm{}, errors.New("missing file part in multipart form data")
+}
+
+func determinePostIntegrity(form PostForm) (parsedIntegrity, error) {
+	ret := parsedIntegrity{
+		integrity: newExpectedIntegrity(),
+	}
+
+	rawAlgorithm, _ := form.Get(formNameXAmzChecksumAlgorithm)
+	headerToAlgo := map[string]checksumAlgorithm{
+		headerXAmzChecksumCrc32:  algorithmCRC32,
+		headerXAmzChecksumCrc32c: algorithmCRC32C,
+		headerXAmzChecksumSha1:   algorithmSHA1,
+		headerXAmzChecksumSha256: algorithmSHA256,
+	}
+
+	var (
+		specifiedAlgorithm *checksumAlgorithm
+		rawChecksum        string
+	)
+	for h, a := range headerToAlgo {
+		c, _ := form.Get(h)
+		if specifiedAlgorithm != nil && c != "" {
+			return parsedIntegrity{}, nestError(
+				ErrInvalidDigest,
+				"expecting a single x-amz-checksum- form field; multiple checksum types are not allowed",
+			)
+		}
+		if c != "" {
+			if rawAlgorithm != "" && !strings.EqualFold(rawAlgorithm, a.String()) {
+				return parsedIntegrity{}, nestError(
+					ErrInvalidDigest,
+					"the %s form field does not match the %s form field", formNameXAmzChecksumAlgorithm, h,
+				)
+			}
+			specifiedAlgorithm, rawChecksum = &a, c
+		}
+	}
+
+	if rawAlgorithm != "" && specifiedAlgorithm == nil {
+		return parsedIntegrity{}, nestError(
+			ErrMissingSecurityHeader,
+			"a corresponding x-amz-checksum- form field is missing",
+		)
+	}
+
+	if specifiedAlgorithm != nil {
+		ret.sumAlgos = append(ret.sumAlgos, *specifiedAlgorithm)
+		ret.integrity.addEncodedString(*specifiedAlgorithm, rawChecksum)
+	} else {
+		// NOTE(amwolff):
+		// https://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectPOST.html
+		// doesn't list CRC64NVME (stale docs?), but we should still
+		// perhaps use it in the absence of any other checksum.
+		ret.sumAlgos = append(ret.sumAlgos, algorithmCRC64NVME)
+	}
+
+	if contentMD5, _ := form.Get(headerContentMD5); contentMD5 != "" {
+		ret.sumAlgos = append(ret.sumAlgos, algorithmMD5)
+		ret.integrity.addEncodedString(algorithmMD5, contentMD5)
+	}
+
+	return ret, nil
 }
