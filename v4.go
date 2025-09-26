@@ -55,8 +55,9 @@ const (
 )
 
 type V4Reader struct {
-	r  io.Reader
-	ir *integrityReader
+	r    io.Reader
+	ir   *integrityReader
+	form PostForm
 
 	unsigned        bool
 	multipleChunks  bool
@@ -79,6 +80,7 @@ type V4Reader struct {
 }
 
 type v4ReaderOptions struct {
+	form            PostForm
 	dateTime        string
 	scope           scope
 	parsedOptions   parsedXAmzContentSHA256
@@ -93,7 +95,7 @@ func newV4Reader(r io.Reader, data v4ReaderOptions) *V4Reader {
 		chunkSHA256 hash.Hash
 	)
 
-	if !data.parsedOptions.unsigned {
+	if !data.parsedOptions.unsigned && data.parsedOptions.streaming {
 		chunkSHA256 = sha256.New()
 		ir = newIntegrityReader(io.TeeReader(r, chunkSHA256), data.parsedIntegrity.sumAlgos)
 	} else {
@@ -103,6 +105,7 @@ func newV4Reader(r io.Reader, data v4ReaderOptions) *V4Reader {
 	return &V4Reader{
 		r:                      r,
 		ir:                     ir,
+		form:                   data.form,
 		unsigned:               data.parsedOptions.unsigned,
 		multipleChunks:         data.parsedOptions.streaming,
 		trailingHeader:         data.parsedOptions.trailer,
@@ -429,6 +432,10 @@ func (r *V4Reader) Read(p []byte) (n int, err error) {
 
 func (r *V4Reader) Checksums() (Checksums, error) {
 	return r.ir.checksums()
+}
+
+func (r *V4Reader) PostForm() PostForm {
+	return r.form
 }
 
 type V4 struct {
@@ -1000,6 +1007,13 @@ func (v4 *V4) canonicalRequestHash(r *http.Request, query url.Values, signedHead
 	return b.Sum()
 }
 
+func (v4 *V4) verifyPost(form PostForm) (v4ReaderOptions, error) {
+	return v4ReaderOptions{
+		form: form,
+		// …
+	}, nil
+}
+
 func (v4 *V4) verify(r *http.Request) (v4ReaderOptions, error) {
 	rawDate, parsedDateTime, err := v4.parseTime(r.Header.Get(headerXAmzDate), r.Header.Get(headerDate))
 	if err != nil {
@@ -1150,10 +1164,6 @@ func (v4 *V4) verifyPresigned(r *http.Request, query url.Values) (v4ReaderOption
 		secretAccessKey: secretAccessKey,
 		seedSignature:   signature,
 	}, nil
-}
-
-func (v4 *V4) verifyPost(form PostForm) (v4ReaderOptions, error) {
-	return v4ReaderOptions{}, nil
 }
 
 func (v4 *V4) Verify(r *http.Request) (*V4Reader, error) {

@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"mime/multipart"
+	"strconv"
 	"testing"
 	"time"
 
@@ -29,6 +31,46 @@ func TestNestedError(t *testing.T) {
 	t.Run("Is", func(t *testing.T) {
 		assert.That(t, errors.Is(nested, outer))
 		assert.That(t, errors.Is(nested, inner))
+	})
+}
+
+func TestTimeOutOfBounds(t *testing.T) {
+	t.Run("within bounds", func(t *testing.T) {
+		now := dummyNow(1970, 1, 1, 2, 0, 0)
+		b1 := time.Date(1970, 1, 1, 1, 0, 0, 0, time.UTC)
+		b2 := time.Date(1970, 1, 1, 3, 0, 0, 0, time.UTC)
+		assert.False(t, timeOutOfBounds(now, b1, b2))
+	})
+	t.Run("before bounds", func(t *testing.T) {
+		now := dummyNow(1970, 1, 2, 3, 0, 0)
+		b1 := time.Date(1970, 1, 2, 3, 1, 0, 0, time.UTC)
+		b2 := time.Date(1970, 1, 2, 3, 3, 0, 0, time.UTC)
+		assert.True(t, timeOutOfBounds(now, b1, b2))
+	})
+	t.Run("after bounds", func(t *testing.T) {
+		now := dummyNow(1970, 1, 2, 4, 4, 4)
+		b1 := time.Date(1970, 1, 2, 3, 4, 1, 0, time.UTC)
+		b2 := time.Date(1970, 1, 2, 3, 4, 3, 0, time.UTC)
+		assert.True(t, timeOutOfBounds(now, b1, b2))
+	})
+	t.Run("swapped bounds", func(t *testing.T) {
+		now := dummyNow(1970, 1, 1, 2, 0, 0)
+		b1 := time.Date(1970, 1, 1, 3, 0, 0, 0, time.UTC)
+		b2 := time.Date(1970, 1, 1, 1, 0, 0, 0, time.UTC)
+		assert.False(t, timeOutOfBounds(now, b1, b2))
+	})
+}
+
+func TestTimeSkewExceeded(t *testing.T) {
+	t.Run("within skew", func(t *testing.T) {
+		now := dummyNow(1970, 1, 1, 2, 0, 0)
+		d := time.Date(1970, 1, 1, 2, 4, 0, 0, time.UTC)
+		assert.False(t, timeSkewExceeded(now, d, 5*time.Minute))
+	})
+	t.Run("exceeds skew", func(t *testing.T) {
+		now := dummyNow(1970, 1, 1, 2, 0, 0)
+		d := time.Date(1970, 1, 1, 2, 6, 0, 0, time.UTC)
+		assert.True(t, timeSkewExceeded(now, d, 5*time.Minute))
 	})
 }
 
@@ -100,6 +142,81 @@ func TestLimitedReader(t *testing.T) {
 	b, err = io.ReadAll(r)
 	assert.NoError(t, err)
 	assert.Equal(t, expected[20:], b)
+}
+
+func TestParseMultipartFormUntilFile(t *testing.T) {
+	newMultipart := func(formFields int, filename string, filesize int64) ([]byte, map[string][]string, *bytes.Buffer, string) {
+		fields, body := make(map[string][]string), bytes.NewBuffer(nil)
+
+		mw := multipart.NewWriter(body)
+		defer func() { assert.NoError(t, mw.Close()) }()
+
+		for i := range formFields {
+			a := strconv.Itoa(i)
+			name, value := "field_"+a, "value_"+a
+			fields[name] = append(fields[name], value)
+			assert.NoError(t, mw.WriteField(name, value))
+		}
+
+		if filename == "" {
+			return nil, fields, body, mw.Boundary()
+		}
+
+		file := bytes.NewBuffer(nil)
+
+		part, err := mw.CreateFormFile("file", filename)
+		assert.NoError(t, err)
+		_, err = io.CopyN(part, io.TeeReader(rand.Reader, file), filesize)
+		assert.NoError(t, err)
+
+		return file.Bytes(), fields, body, mw.Boundary()
+	}
+
+	t.Run("no boundary", func(t *testing.T) {
+		_, _, body, _ := newMultipart(10, "image.jpg", 10)
+
+		_, _, err := parseMultipartFormUntilFile(body, "")
+		assert.Error(t, err)
+	})
+	t.Run("no file", func(t *testing.T) {
+		_, _, body, boundary := newMultipart(10, "", 0)
+
+		_, _, err := parseMultipartFormUntilFile(body, boundary)
+		assert.Error(t, err)
+	})
+	t.Run("form within the size limit", func(t *testing.T) {
+		expectedFile, expectedForm, body, boundary := newMultipart(100, "image.jpg", 30000)
+
+		file, actualForm, err := parseMultipartFormUntilFile(body, boundary)
+		assert.NoError(t, err)
+		defer func() { assert.NoError(t, file.Close()) }()
+
+		assert.Equal(t, "image.jpg", actualForm.FileName())
+
+		actualFile, err := io.ReadAll(file)
+		assert.NoError(t, err)
+		assert.Equal(t, expectedFile, actualFile)
+
+		for name, values := range expectedForm {
+			{
+				actual, headers := actualForm.Get(name)
+				assert.Equal(t, values[0], actual)
+				assert.Equal(t, 1, len(headers))
+			}
+			{
+				actual, headers := actualForm.Values(name)
+				assert.Equal(t, values, actual)
+				assert.Equal(t, 1, len(headers))
+			}
+		}
+	})
+	t.Run("form above limit", func(t *testing.T) {
+		_, _, body, boundary := newMultipart(1000, "image.jpg", 1000)
+
+		_, _, err := parseMultipartFormUntilFile(body, boundary)
+		assert.Error(t, err)
+		assert.That(t, errors.Is(err, errMessageTooLarge))
+	})
 }
 
 type simpleCredentialsProvider struct {

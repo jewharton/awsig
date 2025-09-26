@@ -113,7 +113,7 @@ func parseTimeWithFormats(value string, formats []string) (time.Time, error) {
 	return t, err
 }
 
-func timeOutOfBounds(now func() time.Time, b1, b2 time.Time) bool { // TODO(amwolff): write a unit test
+func timeOutOfBounds(now func() time.Time, b1, b2 time.Time) bool {
 	if b1.After(b2) {
 		b1, b2 = b2, b1
 	}
@@ -123,7 +123,7 @@ func timeOutOfBounds(now func() time.Time, b1, b2 time.Time) bool { // TODO(amwo
 	return false
 }
 
-func timeSkewExceeded(now func() time.Time, t time.Time, skew time.Duration) bool { // TODO(amwolff): write a unit test
+func timeSkewExceeded(now func() time.Time, t time.Time, skew time.Duration) bool {
 	return timeOutOfBounds(now, t.Add(-skew), t.Add(skew))
 }
 
@@ -173,7 +173,8 @@ type PostFormElement struct {
 type PostForm map[string][]PostFormElement
 
 func (f PostForm) FileName() string {
-	return f["file"][0].Value
+	v, _ := f.Get("file")
+	return v
 }
 
 func (f PostForm) Add(key, value string, headers textproto.MIMEHeader) {
