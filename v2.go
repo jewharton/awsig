@@ -290,7 +290,7 @@ func (v2 *V2) verifyPresigned(r *http.Request, query url.Values, virtualHostedBu
 		return v2ReaderOptions{}, err
 	}
 
-	if v2.calculateSignature(r, rawExpires, virtualHostedBucket, secretAccessKey).compare(signature) {
+	if !v2.calculateSignature(r, rawExpires, virtualHostedBucket, secretAccessKey).compare(signature) {
 		return v2ReaderOptions{}, ErrSignatureDoesNotMatch
 	}
 
