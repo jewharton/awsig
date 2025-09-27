@@ -1063,7 +1063,8 @@ func (v4 *V4) verifyPost(ctx context.Context, form PostForm) (v4ReaderOptions, e
 		)
 	}
 
-	integrity, err := determinePostIntegrity(form)
+	var integrity parsedIntegrity
+	integrity.sumAlgos, integrity.integrity, err = determinePostIntegrity(form)
 	if err != nil {
 		return v4ReaderOptions{}, err
 	}

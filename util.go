@@ -307,10 +307,11 @@ func parseMultipartFormUntilFile(r io.Reader, boundary string) (io.ReadCloser, P
 	return nil, PostForm{}, errors.New("missing file part in multipart form data")
 }
 
-func determinePostIntegrity(form PostForm) (parsedIntegrity, error) {
-	ret := parsedIntegrity{
-		integrity: newExpectedIntegrity(),
-	}
+func determinePostIntegrity(form PostForm) ([]checksumAlgorithm, expectedIntegrity, error) {
+	var (
+		sumAlgos  []checksumAlgorithm
+		integrity = newExpectedIntegrity()
+	)
 
 	rawAlgorithm, _ := form.Get(formNameXAmzChecksumAlgorithm)
 	headerToAlgo := map[string]checksumAlgorithm{
@@ -327,14 +328,14 @@ func determinePostIntegrity(form PostForm) (parsedIntegrity, error) {
 	for h, a := range headerToAlgo {
 		c, _ := form.Get(h)
 		if specifiedAlgorithm != nil && c != "" {
-			return parsedIntegrity{}, nestError(
+			return nil, nil, nestError(
 				ErrInvalidDigest,
 				"expecting a single x-amz-checksum- form field; multiple checksum types are not allowed",
 			)
 		}
 		if c != "" {
 			if rawAlgorithm != "" && !strings.EqualFold(rawAlgorithm, a.String()) {
-				return parsedIntegrity{}, nestError(
+				return nil, nil, nestError(
 					ErrInvalidDigest,
 					"the %s form field does not match the %s form field", formNameXAmzChecksumAlgorithm, h,
 				)
@@ -344,27 +345,27 @@ func determinePostIntegrity(form PostForm) (parsedIntegrity, error) {
 	}
 
 	if rawAlgorithm != "" && specifiedAlgorithm == nil {
-		return parsedIntegrity{}, nestError(
+		return nil, nil, nestError(
 			ErrMissingSecurityHeader,
 			"a corresponding x-amz-checksum- form field is missing",
 		)
 	}
 
 	if specifiedAlgorithm != nil {
-		ret.sumAlgos = append(ret.sumAlgos, *specifiedAlgorithm)
-		ret.integrity.addEncodedString(*specifiedAlgorithm, rawChecksum)
+		sumAlgos = append(sumAlgos, *specifiedAlgorithm)
+		integrity.addEncodedString(*specifiedAlgorithm, rawChecksum)
 	} else {
 		// NOTE(amwolff):
 		// https://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectPOST.html
 		// doesn't list CRC64NVME (stale docs?), but we should still
 		// perhaps use it in the absence of any other checksum.
-		ret.sumAlgos = append(ret.sumAlgos, algorithmCRC64NVME)
+		sumAlgos = append(sumAlgos, algorithmCRC64NVME)
 	}
 
 	if contentMD5, _ := form.Get(headerContentMD5); contentMD5 != "" {
-		ret.sumAlgos = append(ret.sumAlgos, algorithmMD5)
-		ret.integrity.addEncodedString(algorithmMD5, contentMD5)
+		sumAlgos = append(sumAlgos, algorithmMD5)
+		integrity.addEncodedString(algorithmMD5, contentMD5)
 	}
 
-	return ret, nil
+	return sumAlgos, integrity, nil
 }
