@@ -217,6 +217,13 @@ func TestParseMultipartFormUntilFile(t *testing.T) {
 		assert.Error(t, err)
 		assert.That(t, errors.Is(err, errMessageTooLarge))
 	})
+	t.Run("form above limit with bogus boundary", func(t *testing.T) {
+		_, _, body, _ := newMultipart(1000, "image.jpg", 1000)
+
+		_, _, err := parseMultipartFormUntilFile(body, "bogus")
+		assert.Error(t, err)
+		assert.That(t, errors.Is(err, errMessageTooLarge))
+	})
 }
 
 type simpleCredentialsProvider struct {
