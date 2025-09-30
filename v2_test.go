@@ -254,6 +254,54 @@ func TestV2(t *testing.T) {
 		assert.Equal(t, file, b)
 	})
 	t.Run("presigned (POST) 2", func(t *testing.T) {
-		t.Skip("TODO(amwolff)")
+		file := make([]byte, 117108)
+		body := bytes.NewBuffer(nil)
+
+		mw := multipart.NewWriter(body)
+
+		assert.NoError(t, mw.SetBoundary("178521717625888"))
+
+		assert.NoError(t, mw.WriteField("key", "user/eric/NewEntry.html"))
+		assert.NoError(t, mw.WriteField("acl", "public-read"))
+		assert.NoError(t, mw.WriteField("success_action_redirect", "http://johnsmith.s3.amazonaws.com/new_post.html"))
+		assert.NoError(t, mw.WriteField("Content-Type", "text/html"))
+		assert.NoError(t, mw.WriteField("x-amz-meta-uuid", "14365123651274"))
+		assert.NoError(t, mw.WriteField("x-amz-meta-tag", "Interesting Post"))
+		assert.NoError(t, mw.WriteField("AWSAccessKeyId", "AKIAIOSFODNN7EXAMPLE"))
+		assert.NoError(t, mw.WriteField("Policy", "eyAiZXhwaXJhdGlvbiI6ICIyMDA3LTEyLTAxVDEyOjAwOjAwLjAwMFoiLAogICJjb25kaXRpb25zIjogWwogICAgeyJidWNrZXQiOiAiam9obnNtaXRoIn0sCiAgICBbInN0YXJ0cy13aXRoIiwgIiRrZXkiLCAidXNlci9lcmljLyJdLAogICAgeyJhY2wiOiAicHVibGljLXJlYWQifSwKICAgIHsic3VjY2Vzc19hY3Rpb25fcmVkaXJlY3QiOiAiaHR0cDovL2pvaG5zbWl0aC5zMy5hbWF6b25hd3MuY29tL25ld19wb3N0Lmh0bWwifSwKICAgIFsiZXEiLCAiJENvbnRlbnQtVHlwZSIsICJ0ZXh0L2h0bWwiXSwKICAgIHsieC1hbXotbWV0YS11dWlkIjogIjE0MzY1MTIzNjUxMjc0In0sCiAgICBbInN0YXJ0cy13aXRoIiwgIiR4LWFtei1tZXRhLXRhZyIsICIiXQogIF0KfQo="))
+		assert.NoError(t, mw.WriteField("Signature", "qA7FWXKq6VvU68lI9KdveT1cWgF="))
+
+		part, err := mw.CreateFormField("file")
+		assert.NoError(t, err)
+
+		_, err = io.ReadFull(rand.Reader, file)
+		assert.NoError(t, err)
+
+		_, err = io.Copy(part, bytes.NewReader(file))
+		assert.NoError(t, err)
+
+		assert.NoError(t, mw.WriteField("submit", "Upload to Amazon S3"))
+
+		assert.NoError(t, mw.Close())
+
+		req := httptest.NewRequest(http.MethodPost, "http://johnsmith.s3.amazonaws.com/", body)
+		req.Header.Add("User-Agent", "Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.8.1.10) Gecko/20071115 Firefox/2.0.0.10")
+		req.Header.Add("Accept", "text/xml,application/xml,application/xhtml+xml,text/html;q=0.9,text/plain;q=0.8,image/png,*/*;q=0.5")
+		req.Header.Add("Accept-Language", "en-us,en;q=0.5")
+		req.Header.Add("Accept-Encoding", "gzip,deflate")
+		req.Header.Add("Accept-Charset", "ISO-8859-1,utf-8;q=0.7,*;q=0.7")
+		req.Header.Add("Keep-Alive", "300")
+		req.Header.Add("Connection", "keep-alive")
+		req.Header.Set("Content-Type", "multipart/form-data; boundary=178521717625888")
+		req.Header.Add("Content-Length", strconv.Itoa(body.Len()))
+
+		v2 := NewV2(provider3)
+
+		r, err := v2.Verify(req, "johnsmith")
+		assert.NoError(t, err)
+
+		b, err := io.ReadAll(r)
+		assert.NoError(t, err)
+		assert.Equal(t, file, b)
 	})
 }
