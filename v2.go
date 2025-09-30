@@ -1,12 +1,14 @@
 package awsig
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha1"
 	"errors"
 	"hash"
 	"io"
 	"maps"
+	"mime"
 	"net/http"
 	"net/url"
 	"slices"
@@ -23,10 +25,12 @@ const (
 
 type V2Reader struct {
 	ir        *integrityReader
+	form      PostForm
 	integrity expectedIntegrity
 }
 
 type v2ReaderOptions struct {
+	form              PostForm
 	sumAlgos          []checksumAlgorithm
 	expectedIntegrity expectedIntegrity
 }
@@ -34,6 +38,7 @@ type v2ReaderOptions struct {
 func newV2Reader(r io.Reader, data v2ReaderOptions) *V2Reader {
 	return &V2Reader{
 		ir:        newIntegrityReader(r, data.sumAlgos),
+		form:      data.form,
 		integrity: data.expectedIntegrity,
 	}
 }
@@ -49,6 +54,10 @@ func (r *V2Reader) Read(p []byte) (n int, err error) {
 
 func (r *V2Reader) Checksums() (Checksums, error) {
 	return r.ir.checksums()
+}
+
+func (r *V2Reader) PostForm() PostForm {
+	return r.form
 }
 
 type V2 struct {
@@ -216,6 +225,50 @@ func (v2 *V2) calculateSignature(r *http.Request, dateElement, virtualHostedBuck
 	return b.Sum()
 }
 
+func (v2 *V2) calculatePostSignature(data, key string) signatureV2 {
+	return hmacSHA1([]byte(key), data)
+}
+
+func (v2 *V2) verifyPost(ctx context.Context, form PostForm) (v2ReaderOptions, error) {
+	rawSignature, _ := form.Get(querySignature)
+	signature, err := newSignatureV2FromEncoded(rawSignature)
+	if err != nil {
+		return v2ReaderOptions{}, nestError(
+			ErrInvalidSignature,
+			"the %s form field does not contain a valid signature: %w", querySignature, err,
+		)
+	}
+
+	policy, _ := form.Get(formNamePolicy)
+	if policy == "" {
+		return v2ReaderOptions{}, nestError(
+			ErrInvalidRequest,
+			"the %s form field is missing", formNamePolicy,
+		)
+	}
+
+	sumAlgos, integrity, err := determinePostIntegrity(form)
+	if err != nil {
+		return v2ReaderOptions{}, err
+	}
+
+	accessKeyID, _ := form.Get(queryAWSAccessKeyId)
+	secretAccessKey, err := v2.provider.Provide(ctx, accessKeyID)
+	if err != nil {
+		return v2ReaderOptions{}, err
+	}
+
+	if !v2.calculatePostSignature(policy, secretAccessKey).compare(signature) {
+		return v2ReaderOptions{}, ErrSignatureDoesNotMatch
+	}
+
+	return v2ReaderOptions{
+		form:              form,
+		sumAlgos:          sumAlgos,
+		expectedIntegrity: integrity,
+	}, nil
+}
+
 func (v2 *V2) verify(r *http.Request, virtualHostedBucket string) (v2ReaderOptions, error) {
 	headerDateValue := r.Header.Get(headerDate)
 	parsedDateTime, err := v2.parseTime(r.Header.Get(headerXAmzDate), headerDateValue)
@@ -301,11 +354,24 @@ func (v2 *V2) verifyPresigned(r *http.Request, query url.Values, virtualHostedBu
 }
 
 func (v2 *V2) Verify(r *http.Request, virtualHostedBucket string) (*V2Reader, error) {
-	if r.Method == http.MethodPost {
-		return nil, nestError(
-			ErrNotImplemented,
-			"authenticating HTTP POST requests is not implemented yet",
-		)
+	typ, params, err := mime.ParseMediaType(r.Header.Get(headerContentType))
+	if err != nil {
+		typ = ""
+	}
+
+	if r.Method == http.MethodPost && typ == "multipart/form-data" {
+		file, form, err := parseMultipartFormUntilFile(r.Body, params["boundary"])
+		if err != nil {
+			return nil, nestError(
+				ErrInvalidRequest,
+				"unable to parse multipart form data: %w", err,
+			)
+		}
+		data, err := v2.verifyPost(r.Context(), form)
+		if err != nil {
+			return nil, err
+		}
+		return newV2Reader(file, data), nil
 	} else if r.Header.Get(headerAuthorization) != "" {
 		data, err := v2.verify(r, virtualHostedBucket)
 		if err != nil {

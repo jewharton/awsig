@@ -5,8 +5,11 @@ import (
 	"crypto/rand"
 	"errors"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
+	"strconv"
 	"testing"
 	"time"
 
@@ -188,5 +191,69 @@ func TestV2(t *testing.T) {
 
 		_, err := v2.Verify(req, "johnsmith")
 		assert.Error(t, err)
+	})
+
+	provider3 := simpleCredentialsProvider{
+		accessKeyID:     "AKIAIOSFODNN7EXAMPLE",
+		secretAccessKey: "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",
+	}
+
+	t.Run("presigned (POST)", func(t *testing.T) {
+		file := make([]byte, 117108)
+		body := bytes.NewBuffer(nil)
+
+		mw := multipart.NewWriter(body)
+
+		assert.NoError(t, mw.SetBoundary("9431149156168"))
+
+		assert.NoError(t, mw.WriteField("key", "user/eric/MyPicture.jpg"))
+		assert.NoError(t, mw.WriteField("acl", "public-read"))
+		assert.NoError(t, mw.WriteField("success_action_redirect", "http://johnsmith.s3.amazonaws.com/successful_upload.html"))
+		assert.NoError(t, mw.WriteField("Content-Type", "image/jpeg"))
+		assert.NoError(t, mw.WriteField("x-amz-meta-uuid", "14365123651274"))
+		assert.NoError(t, mw.WriteField("x-amz-meta-tag", "Some,Tag,For,Picture"))
+		assert.NoError(t, mw.WriteField("AWSAccessKeyId", "AKIAIOSFODNN7EXAMPLE"))
+		assert.NoError(t, mw.WriteField("Policy", "eyAiZXhwaXJhdGlvbiI6ICIyMDA3LTEyLTAxVDEyOjAwOjAwLjAwMFoiLAogICJjb25kaXRpb25zIjogWwogICAgeyJidWNrZXQiOiAiam9obnNtaXRoIn0sCiAgICBbInN0YXJ0cy13aXRoIiwgIiRrZXkiLCAidXNlci9lcmljLyJdLAogICAgeyJhY2wiOiAicHVibGljLXJlYWQifSwKICAgIHsic3VjY2Vzc19hY3Rpb25fcmVkaXJlY3QiOiAiaHR0cDovL2pvaG5zbWl0aC5zMy5hbWF6b25hd3MuY29tL3N1Y2Nlc3NmdWxfdXBsb2FkLmh0bWwifSwKICAgIFsic3RhcnRzLXdpdGgiLCAiJENvbnRlbnQtVHlwZSIsICJpbWFnZS8iXSwKICAgIHsieC1hbXotbWV0YS11dWlkIjogIjE0MzY1MTIzNjUxMjc0In0sCiAgICBbInN0YXJ0cy13aXRoIiwgIiR4LWFtei1tZXRhLXRhZyIsICIiXQogIF0KfQo="))
+		assert.NoError(t, mw.WriteField("Signature", "0RavWzkygo6QX9caELEqKi9kDbU="))
+
+		partHeaders := make(textproto.MIMEHeader)
+		partHeaders.Set("Content-Disposition", multipart.FileContentDisposition("file", "MyFilename.jpg"))
+		partHeaders.Set("Content-Type", "image/jpeg")
+
+		part, err := mw.CreatePart(partHeaders)
+		assert.NoError(t, err)
+
+		_, err = io.ReadFull(rand.Reader, file)
+		assert.NoError(t, err)
+
+		_, err = io.Copy(part, bytes.NewReader(file))
+		assert.NoError(t, err)
+
+		assert.NoError(t, mw.WriteField("submit", "Upload to Amazon S3"))
+
+		assert.NoError(t, mw.Close())
+
+		req := httptest.NewRequest(http.MethodPost, "http://johnsmith.s3.amazonaws.com/", body)
+		req.Header.Add("User-Agent", "Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.8.1.10) Gecko/20071115 Firefox/2.0.0.10")
+		req.Header.Add("Accept", "text/xml,application/xml,application/xhtml+xml,text/html;q=0.9,text/plain;q=0.8,image/png,*/*;q=0.5")
+		req.Header.Add("Accept-Language", "en-us,en;q=0.5")
+		req.Header.Add("Accept-Encoding", "gzip,deflate")
+		req.Header.Add("Accept-Charset", "ISO-8859-1,utf-8;q=0.7,*;q=0.7")
+		req.Header.Add("Keep-Alive", "300")
+		req.Header.Add("Connection", "keep-alive")
+		req.Header.Set("Content-Type", "multipart/form-data; boundary=9431149156168")
+		req.Header.Add("Content-Length", strconv.Itoa(body.Len()))
+
+		v2 := NewV2(provider3)
+
+		r, err := v2.Verify(req, "johnsmith")
+		assert.NoError(t, err)
+
+		b, err := io.ReadAll(r)
+		assert.NoError(t, err)
+		assert.Equal(t, file, b)
+	})
+	t.Run("presigned (POST) 2", func(t *testing.T) {
+		t.Skip("TODO(amwolff)")
 	})
 }
