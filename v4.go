@@ -1019,7 +1019,7 @@ func (v4 *V4) calculatePostSignature(data signatureV4Data, secretAccessKey strin
 	h := hmac.New(sha256.New, key)
 	h.Write(data.digest)
 
-	return signatureV4(h.Sum(nil))
+	return h.Sum(nil)
 }
 
 func (v4 *V4) verifyPost(ctx context.Context, form PostForm) (v4ReaderOptions, error) {
@@ -1033,8 +1033,11 @@ func (v4 *V4) verifyPost(ctx context.Context, form PostForm) (v4ReaderOptions, e
 		)
 	}
 
-	if timeSkewExceeded(v4.now, parsedDateTime, maxRequestTimeSkew) {
-		return v4ReaderOptions{}, ErrRequestTimeTooSkewed
+	if v4.now().Before(parsedDateTime) {
+		return v4ReaderOptions{}, nestError(
+			ErrAccessDenied,
+			"the request is not yet valid",
+		)
 	}
 
 	rawAlgorithm, _ := form.Get(queryXAmzAlgorithm)
