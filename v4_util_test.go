@@ -38,8 +38,8 @@ func TestCalculateSignatureV4(t *testing.T) {
 
 	scope := scope{
 		date:    "20130524",
-		service: "s3",
 		region:  "us-east-1",
+		service: "s3",
 	}
 
 	t.Run("no suffix", func(t *testing.T) {

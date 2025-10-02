@@ -52,12 +52,12 @@ func (r *V2Reader) Read(p []byte) (n int, err error) {
 	return n, err
 }
 
-func (r *V2Reader) Checksums() (Checksums, error) {
-	return r.ir.checksums()
-}
-
 func (r *V2Reader) PostForm() PostForm {
 	return r.form
+}
+
+func (r *V2Reader) Checksums() (Checksums, error) {
+	return r.ir.checksums()
 }
 
 type V2 struct {

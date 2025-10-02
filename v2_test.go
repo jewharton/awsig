@@ -17,6 +17,15 @@ import (
 )
 
 func TestV2(t *testing.T) {
+	newV2 := func(provider CredentialsProvider, now func() time.Time) verifier[*V2Reader] {
+		v2 := NewV2(provider)
+		v2.now = now
+		return v2
+	}
+	testV2(t, newV2)
+}
+
+func testV2[T Reader](t *testing.T, newV2 func(CredentialsProvider, func() time.Time) verifier[T]) {
 	provider := simpleCredentialsProvider{
 		accessKeyID:     "AKIAIOSFODNN7EXAMPLE",
 		secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
@@ -27,8 +36,7 @@ func TestV2(t *testing.T) {
 		req.Header.Add("Date", "Tue, 27 Mar 2007 19:36:42 +0000")
 		req.Header.Add("Authorization", "AWS AKIAIOSFODNN7EXAMPLE:qgk2+6Sv9/oM7G3qLEjTH1a1l1g=")
 
-		v2 := NewV2(provider)
-		v2.now = dummyNow(2007, time.March, 27, 19, 36, 42)
+		v2 := newV2(provider, dummyNow(2007, time.March, 27, 19, 36, 42))
 
 		r, err := v2.Verify(req, "awsexamplebucket1")
 		assert.NoError(t, err)
@@ -50,8 +58,7 @@ func TestV2(t *testing.T) {
 		req.Header.Add("Date", "Tue, 27 Mar 2007 21:15:45 +0000")
 		req.Header.Add("Authorization", "AWS AKIAIOSFODNN7EXAMPLE:iqRzw+ileNPu1fhspnRs8nOjjIA=")
 
-		v2 := NewV2(provider)
-		v2.now = dummyNow(2007, time.March, 27, 21, 15, 45)
+		v2 := newV2(provider, dummyNow(2007, time.March, 27, 21, 15, 45))
 
 		r, err := v2.Verify(req, "awsexamplebucket1")
 		assert.NoError(t, err)
@@ -66,8 +73,7 @@ func TestV2(t *testing.T) {
 		req.Header.Add("Date", "Tue, 27 Mar 2007 19:42:41 +0000")
 		req.Header.Add("Authorization", "AWS AKIAIOSFODNN7EXAMPLE:m0WP8eCtspQl5Ahe6L1SozdX9YA=")
 
-		v2 := NewV2(provider)
-		v2.now = dummyNow(2007, time.March, 27, 19, 42, 41)
+		v2 := newV2(provider, dummyNow(2007, time.March, 27, 19, 42, 41))
 
 		r, err := v2.Verify(req, "awsexamplebucket1")
 		assert.NoError(t, err)
@@ -82,8 +88,7 @@ func TestV2(t *testing.T) {
 		req.Header.Add("Date", "Tue, 27 Mar 2007 19:44:46 +0000")
 		req.Header.Add("Authorization", "AWS AKIAIOSFODNN7EXAMPLE:82ZHiFIjc+WbcwFKGUVEQspPn+0=")
 
-		v2 := NewV2(provider)
-		v2.now = dummyNow(2007, time.March, 27, 19, 44, 46)
+		v2 := newV2(provider, dummyNow(2007, time.March, 27, 19, 44, 46))
 
 		r, err := v2.Verify(req, "awsexamplebucket1")
 		assert.NoError(t, err)
@@ -111,8 +116,7 @@ func TestV2(t *testing.T) {
 		req.Header.Add("Date", "Wed, 28 Mar 2007 01:29:59 +0000")
 		req.Header.Add("Authorization", "AWS AKIAIOSFODNN7EXAMPLE:qGdzdERIC03wnaRNKh6OqZehG9s=")
 
-		v2 := NewV2(provider)
-		v2.now = dummyNow(2007, time.March, 28, 1, 29, 59)
+		v2 := newV2(provider, dummyNow(2007, time.March, 28, 1, 29, 59))
 
 		r, err := v2.Verify(req, "")
 		assert.NoError(t, err)
@@ -127,8 +131,7 @@ func TestV2(t *testing.T) {
 		req.Header.Add("Date", "Wed, 28 Mar 2007 01:49:49 +0000")
 		req.Header.Add("Authorization", "AWS AKIAIOSFODNN7EXAMPLE:DNEZGsoieTZ92F3bUfSPQcbGmlM=")
 
-		v2 := NewV2(provider)
-		v2.now = dummyNow(2007, time.March, 28, 1, 49, 49)
+		v2 := newV2(provider, dummyNow(2007, time.March, 28, 1, 49, 49))
 
 		r, err := v2.Verify(req, "")
 		assert.NoError(t, err)
@@ -148,8 +151,7 @@ func TestV2(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "http://s3.amazonaws.com/quotes/nelson?AWSAccessKeyId=44CF9590006BF252F707&Expires=1141889120&Signature=vjbyPxybdZaNmGa%2ByT272YEAiv4%3D", nil)
 		req.Header.Add("Date", "Thu, 09 Mar 2006 07:25:20 GMT")
 
-		v2 := NewV2(provider2)
-		v2.now = dummyNow(2006, time.March, 9, 7, 25, 20)
+		v2 := newV2(provider2, dummyNow(2006, time.March, 9, 7, 25, 20))
 
 		r, err := v2.Verify(req, "")
 		assert.NoError(t, err)
@@ -162,8 +164,7 @@ func TestV2(t *testing.T) {
 	t.Run("presigned 2", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "https://johnsmith.s3.amazonaws.com/photos/puppy.jpg?AWSAccessKeyId=AKIAIOSFODNN7EXAMPLE&Signature=NpgCjnDzrM%2BWFzoENXmpNDUsSn8%3D&Expires=1175139620", nil)
 
-		v2 := NewV2(provider)
-		v2.now = dummyNow(2007, time.March, 29, 3, 40, 19)
+		v2 := newV2(provider, dummyNow(2007, time.March, 29, 3, 40, 19))
 
 		r, err := v2.Verify(req, "johnsmith")
 		assert.NoError(t, err)
@@ -177,8 +178,7 @@ func TestV2(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "http://s3.amazonaws.com/quotes/nelson?AWSAccessKeyId=44CF9590006BF252F707&Expires=1141889120&Signature=vjbyPxybdZaNmGa%2ByT272YEAiv4%3D", nil)
 		req.Header.Add("Date", "Mon, 26 Mar 2007 19:37:58 +0000")
 
-		v2 := NewV2(provider2)
-		v2.now = dummyNow(2007, time.March, 26, 19, 37, 58)
+		v2 := newV2(provider2, dummyNow(2007, time.March, 26, 19, 37, 58))
 
 		_, err := v2.Verify(req, "")
 		assert.Error(t, err)
@@ -186,8 +186,7 @@ func TestV2(t *testing.T) {
 	t.Run("expired presigned 2", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "https://johnsmith.s3.amazonaws.com/photos/puppy.jpg?AWSAccessKeyId=AKIAIOSFODNN7EXAMPLE&Signature=NpgCjnDzrM%2BWFzoENXmpNDUsSn8%3D&Expires=1175139620", nil)
 
-		v2 := NewV2(provider)
-		v2.now = dummyNow(2007, time.March, 29, 3, 40, 21)
+		v2 := newV2(provider, dummyNow(2007, time.March, 29, 3, 40, 21))
 
 		_, err := v2.Verify(req, "johnsmith")
 		assert.Error(t, err)
@@ -244,7 +243,7 @@ func TestV2(t *testing.T) {
 		req.Header.Set("Content-Type", "multipart/form-data; boundary=9431149156168")
 		req.Header.Add("Content-Length", strconv.Itoa(body.Len()))
 
-		v2 := NewV2(provider3)
+		v2 := newV2(provider3, time.Now)
 
 		r, err := v2.Verify(req, "johnsmith")
 		assert.NoError(t, err)
@@ -295,7 +294,7 @@ func TestV2(t *testing.T) {
 		req.Header.Set("Content-Type", "multipart/form-data; boundary=178521717625888")
 		req.Header.Add("Content-Length", strconv.Itoa(body.Len()))
 
-		v2 := NewV2(provider3)
+		v2 := newV2(provider3, time.Now)
 
 		r, err := v2.Verify(req, "johnsmith")
 		assert.NoError(t, err)

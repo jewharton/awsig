@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"mime/multipart"
+	"net/http"
 	"strconv"
 	"testing"
 	"time"
@@ -224,6 +225,10 @@ func TestParseMultipartFormUntilFile(t *testing.T) {
 		assert.Error(t, err)
 		assert.That(t, errors.Is(err, errMessageTooLarge))
 	})
+}
+
+type verifier[T any] interface {
+	Verify(r *http.Request, virtualHostedBucket string) (T, error)
 }
 
 type simpleCredentialsProvider struct {

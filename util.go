@@ -75,6 +75,12 @@ type CredentialsProvider interface {
 	Provide(ctx context.Context, accessKeyID string) (secretAccessKey string, _ error)
 }
 
+type Reader interface {
+	io.Reader
+	PostForm() PostForm
+	Checksums() (Checksums, error)
+}
+
 type nestedError struct {
 	outer error
 	inner error
@@ -219,6 +225,14 @@ func (f PostForm) Values(key string) ([]string, []textproto.MIMEHeader) {
 		hdrs = append(hdrs, e.Headers)
 	}
 	return vals, hdrs
+}
+
+func (f PostForm) Has(key string) bool {
+	if f == nil {
+		return false
+	}
+	_, ok := f[textproto.CanonicalMIMEHeaderKey(key)]
+	return ok
 }
 
 var errLimitReached = errors.New("limitedReader: limit reached")

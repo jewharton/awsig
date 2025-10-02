@@ -432,12 +432,12 @@ func (r *V4Reader) Read(p []byte) (n int, err error) {
 	return n, err
 }
 
-func (r *V4Reader) Checksums() (Checksums, error) {
-	return r.ir.checksums()
-}
-
 func (r *V4Reader) PostForm() PostForm {
 	return r.form
+}
+
+func (r *V4Reader) Checksums() (Checksums, error) {
+	return r.ir.checksums()
 }
 
 type V4 struct {
