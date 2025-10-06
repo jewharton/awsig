@@ -17,6 +17,7 @@ import (
 var (
 	ErrAuthorizationHeaderMalformed      = errors.New("the authorization header that you provided is not valid")
 	ErrAuthorizationQueryParametersError = errors.New("the authorization query parameters that you provided are not valid")
+	ErrBadDigest                         = errors.New("the Content-MD5 or checksum value that you specified did not match what the server received")
 	ErrEntityTooLarge                    = errors.New("your proposed upload exceeds the maximum allowed object size")
 	ErrEntityTooSmall                    = errors.New("your proposed upload is smaller than the minimum allowed object size")
 	ErrIncompleteBody                    = errors.New("you did not provide the number of bytes specified by the Content-Length HTTP header")
@@ -40,21 +41,14 @@ var (
 const (
 	xAmzHeaderPrefix = "x-amz-"
 
-	headerAuthorization            = "authorization"
-	headerContentMD5               = "content-md5"
-	headerContentType              = "content-type"
-	headerDate                     = "date"
-	headerXAmzChecksumCrc32        = xAmzHeaderPrefix + "checksum-crc32"
-	headerXAmzChecksumCrc32c       = xAmzHeaderPrefix + "checksum-crc32c"
-	headerXAmzChecksumCrc64nvme    = xAmzHeaderPrefix + "checksum-crc64nvme"
-	headerXAmzChecksumSha1         = xAmzHeaderPrefix + "checksum-sha1"
-	headerXAmzChecksumSha256       = xAmzHeaderPrefix + "checksum-sha256"
-	headerXAmzContentSha256        = xAmzHeaderPrefix + "content-sha256"
-	headerXAmzDate                 = xAmzHeaderPrefix + "date"
-	headerXAmzSdkChecksumAlgorithm = xAmzHeaderPrefix + "sdk-checksum-algorithm"
+	headerAuthorization     = "authorization"
+	headerContentMD5        = "content-md5"
+	headerContentType       = "content-type"
+	headerDate              = "date"
+	headerXAmzContentSha256 = xAmzHeaderPrefix + "content-sha256"
+	headerXAmzDate          = xAmzHeaderPrefix + "date"
 
-	formNamePolicy                = "Policy"
-	formNameXAmzChecksumAlgorithm = xAmzHeaderPrefix + "checksum-algorithm"
+	formNamePolicy = "Policy"
 
 	timeFormatISO8601  = "20060102T150405Z"
 	timeFormatYYYYMMDD = "20060102"
@@ -76,9 +70,10 @@ type CredentialsProvider interface {
 }
 
 type Reader interface {
-	io.Reader
 	PostForm() PostForm
-	Checksums() (Checksums, error)
+	RequestChecksums(...ChecksumRequest) error
+	io.Reader
+	Checksums() (map[ChecksumAlgorithm][]byte, error)
 }
 
 type nestedError struct {
@@ -319,67 +314,4 @@ func parseMultipartFormUntilFile(r io.Reader, boundary string) (io.ReadCloser, P
 	}
 
 	return nil, PostForm{}, errors.New("missing file part in multipart form data")
-}
-
-func determinePostIntegrity(form PostForm) ([]checksumAlgorithm, expectedIntegrity, error) {
-	var (
-		sumAlgos  []checksumAlgorithm
-		integrity = newExpectedIntegrity()
-	)
-
-	rawAlgorithm, _ := form.Get(formNameXAmzChecksumAlgorithm)
-	headerToAlgo := map[string]checksumAlgorithm{
-		headerXAmzChecksumCrc32:  algorithmCRC32,
-		headerXAmzChecksumCrc32c: algorithmCRC32C,
-		headerXAmzChecksumSha1:   algorithmSHA1,
-		headerXAmzChecksumSha256: algorithmSHA256,
-	}
-
-	var (
-		specifiedAlgorithm *checksumAlgorithm
-		rawChecksum        string
-	)
-	for h, a := range headerToAlgo {
-		c, _ := form.Get(h)
-		if specifiedAlgorithm != nil && c != "" {
-			return nil, nil, nestError(
-				ErrInvalidDigest,
-				"expecting a single x-amz-checksum- form field; multiple checksum types are not allowed",
-			)
-		}
-		if c != "" {
-			if rawAlgorithm != "" && !strings.EqualFold(rawAlgorithm, a.String()) {
-				return nil, nil, nestError(
-					ErrInvalidDigest,
-					"the %s form field does not match the %s form field", formNameXAmzChecksumAlgorithm, h,
-				)
-			}
-			specifiedAlgorithm, rawChecksum = &a, c
-		}
-	}
-
-	if rawAlgorithm != "" && specifiedAlgorithm == nil {
-		return nil, nil, nestError(
-			ErrMissingSecurityHeader,
-			"a corresponding x-amz-checksum- form field is missing",
-		)
-	}
-
-	if specifiedAlgorithm != nil {
-		sumAlgos = append(sumAlgos, *specifiedAlgorithm)
-		integrity.addEncodedString(*specifiedAlgorithm, rawChecksum)
-	} else {
-		// NOTE(amwolff):
-		// https://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectPOST.html
-		// doesn't list CRC64NVME (stale docs?), but we should still
-		// perhaps use it in the absence of any other checksum.
-		sumAlgos = append(sumAlgos, algorithmCRC64NVME)
-	}
-
-	if contentMD5, _ := form.Get(headerContentMD5); contentMD5 != "" {
-		sumAlgos = append(sumAlgos, algorithmMD5)
-		integrity.addEncodedString(algorithmMD5, contentMD5)
-	}
-
-	return sumAlgos, integrity, nil
 }

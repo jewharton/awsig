@@ -12,23 +12,23 @@ import (
 func TestIntegrityReader(t *testing.T) {
 	const data = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor"
 
-	ei := newExpectedIntegrity()
-	ei.addEncodedString(algorithmCRC32, "AMHftQ==")
-	ei.addEncodedString(algorithmCRC32C, "L9qeQg==")
-	ei.addEncodedString(algorithmCRC64NVME, "sa/Hm4j1eiw=")
-	ei.addEncodedString(algorithmMD5, "35eb3b58fa38ad797aa89144f54199c3")
-	ei.addEncodedString(algorithmSHA1, "kCwbMV39/ST8gj+3T1hnHpxuz6Y=")
-	ei.addEncodedString(algorithmSHA256, "HD+Vir2FxUkFyX/o4GKP52SVcRlion2q40AzeBSG2gA=")
-	ei.addEncodedString(algorithmHashedPayload, "1c3f958abd85c54905c97fe8e0628fe76495711962a27daae34033781486da00")
+	ei := make(expectedIntegrity)
+	assert.NoError(t, ei.setEncodedString(AlgorithmCRC32, "AMHftQ=="))
+	assert.NoError(t, ei.setEncodedString(AlgorithmCRC32C, "L9qeQg=="))
+	assert.NoError(t, ei.setEncodedString(AlgorithmCRC64NVME, "sa/Hm4j1eiw="))
+	assert.NoError(t, ei.setEncodedString(AlgorithmMD5, "Nes7WPo4rXl6qJFE9UGZww=="))
+	assert.NoError(t, ei.setEncodedString(AlgorithmSHA1, "kCwbMV39/ST8gj+3T1hnHpxuz6Y="))
+	assert.NoError(t, ei.setEncodedString(AlgorithmSHA256, "HD+Vir2FxUkFyX/o4GKP52SVcRlion2q40AzeBSG2gA="))
+	assert.NoError(t, ei.setEncodedString(algorithmHashedPayload, "1c3f958abd85c54905c97fe8e0628fe76495711962a27daae34033781486da00"))
 
-	ir := newIntegrityReader(strings.NewReader(data), []checksumAlgorithm{
-		algorithmCRC32,
-		algorithmCRC32C,
-		algorithmCRC64NVME,
-		algorithmSHA1,
-		algorithmSHA256,
-		algorithmHashedPayload,
-	})
+	ir := newIntegrityReader(strings.NewReader(data))
+	assert.NoError(t, ir.addAlgorithm(AlgorithmCRC32))
+	assert.NoError(t, ir.addAlgorithm(AlgorithmCRC32C))
+	assert.NoError(t, ir.addAlgorithm(AlgorithmCRC64NVME))
+	assert.NoError(t, ir.addAlgorithm(AlgorithmMD5))
+	assert.NoError(t, ir.addAlgorithm(AlgorithmSHA1))
+	assert.NoError(t, ir.addAlgorithm(AlgorithmSHA256))
+	assert.NoError(t, ir.addAlgorithm(algorithmHashedPayload))
 
 	buf := bytes.NewBuffer(nil)
 
@@ -37,4 +37,15 @@ func TestIntegrityReader(t *testing.T) {
 
 	assert.Equal(t, data, buf.String())
 	assert.NoError(t, ir.verify(ei))
+
+	actual, err := ir.checksums()
+	assert.NoError(t, err)
+	assert.Equal(t, map[ChecksumAlgorithm][]byte{
+		AlgorithmCRC32:     {0x00, 0xc1, 0xdf, 0xb5},
+		AlgorithmCRC32C:    {0x2f, 0xda, 0x9e, 0x42},
+		AlgorithmCRC64NVME: {0xb1, 0xaf, 0xc7, 0x9b, 0x88, 0xf5, 0x7a, 0x2c},
+		AlgorithmMD5:       {0x35, 0xeb, 0x3b, 0x58, 0xfa, 0x38, 0xad, 0x79, 0x7a, 0xa8, 0x91, 0x44, 0xf5, 0x41, 0x99, 0xc3},
+		AlgorithmSHA1:      {0x90, 0x2c, 0x1b, 0x31, 0x5d, 0xfd, 0xfd, 0x24, 0xfc, 0x82, 0x3f, 0xb7, 0x4f, 0x58, 0x67, 0x1e, 0x9c, 0x6e, 0xcf, 0xa6},
+		AlgorithmSHA256:    {0x1c, 0x3f, 0x95, 0x8a, 0xbd, 0x85, 0xc5, 0x49, 0x05, 0xc9, 0x7f, 0xe8, 0xe0, 0x62, 0x8f, 0xe7, 0x64, 0x95, 0x71, 0x19, 0x62, 0xa2, 0x7d, 0xaa, 0xe3, 0x40, 0x33, 0x78, 0x14, 0x86, 0xda, 0x00},
+	}, actual)
 }

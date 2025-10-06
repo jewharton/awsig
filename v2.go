@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha1"
 	"errors"
+	"fmt"
 	"hash"
 	"io"
 	"maps"
@@ -30,33 +31,47 @@ type V2Reader struct {
 }
 
 type v2ReaderOptions struct {
-	form              PostForm
-	sumAlgos          []checksumAlgorithm
-	expectedIntegrity expectedIntegrity
+	form PostForm
 }
 
 func newV2Reader(r io.Reader, data v2ReaderOptions) *V2Reader {
 	return &V2Reader{
-		ir:        newIntegrityReader(r, data.sumAlgos),
+		ir:        newIntegrityReader(r),
 		form:      data.form,
-		integrity: data.expectedIntegrity,
+		integrity: make(expectedIntegrity),
 	}
-}
-
-func (r *V2Reader) Read(p []byte) (n int, err error) {
-	if n, err = r.ir.Read(p); errors.Is(err, io.EOF) {
-		if err := r.ir.verify(r.integrity); err != nil {
-			return n, err
-		}
-	}
-	return n, err
 }
 
 func (r *V2Reader) PostForm() PostForm {
 	return r.form
 }
 
-func (r *V2Reader) Checksums() (Checksums, error) {
+func (r *V2Reader) RequestChecksums(requests ...ChecksumRequest) error {
+	for i, req := range requests {
+		if !req.valid() {
+			return fmt.Errorf("uninitialized request: %d", i)
+		}
+		if req.trailing {
+			return fmt.Errorf("could not add %d/%s: trailing checksums are not supported in V2", i, req.algorithm)
+		}
+		if err := r.ir.addAlgorithm(req.algorithm); err != nil {
+			return fmt.Errorf("could not add %d/%s: %w", i, req.algorithm, err)
+		}
+		r.integrity.setDecoded(req.algorithm, req.value)
+	}
+	return nil
+}
+
+func (r *V2Reader) Read(p []byte) (n int, err error) {
+	if n, err = r.ir.Read(p); errors.Is(err, io.EOF) {
+		if err := r.ir.verify(r.integrity); err != nil {
+			return n, nestError(ErrBadDigest, "verify failed: %w", err)
+		}
+	}
+	return n, err
+}
+
+func (r *V2Reader) Checksums() (map[ChecksumAlgorithm][]byte, error) {
 	return r.ir.checksums()
 }
 
@@ -121,10 +136,6 @@ func (v2 *V2) parseAuthorization(rawAuthorization string) (parsedAuthorizationV2
 		accessKeyID: accessKeyID,
 		signature:   signature,
 	}, nil
-}
-
-func (v2 *V2) determineIntegrity(headers http.Header) ([]checksumAlgorithm, expectedIntegrity, error) {
-	return nil, expectedIntegrity{}, nil // TODO(amwolff)
 }
 
 func (v2 *V2) calculateSignature(r *http.Request, dateElement, virtualHostedBucket, key string) signatureV2 {
@@ -247,11 +258,6 @@ func (v2 *V2) verifyPost(ctx context.Context, form PostForm) (v2ReaderOptions, e
 		)
 	}
 
-	sumAlgos, integrity, err := determinePostIntegrity(form)
-	if err != nil {
-		return v2ReaderOptions{}, err
-	}
-
 	accessKeyID, _ := form.Get(queryAWSAccessKeyId)
 	secretAccessKey, err := v2.provider.Provide(ctx, accessKeyID)
 	if err != nil {
@@ -263,9 +269,7 @@ func (v2 *V2) verifyPost(ctx context.Context, form PostForm) (v2ReaderOptions, e
 	}
 
 	return v2ReaderOptions{
-		form:              form,
-		sumAlgos:          sumAlgos,
-		expectedIntegrity: integrity,
+		form: form,
 	}, nil
 }
 
@@ -288,11 +292,6 @@ func (v2 *V2) verify(r *http.Request, virtualHostedBucket string) (v2ReaderOptio
 		return v2ReaderOptions{}, err
 	}
 
-	integritySumAlgos, integrity, err := v2.determineIntegrity(r.Header)
-	if err != nil {
-		return v2ReaderOptions{}, err
-	}
-
 	secretAccessKey, err := v2.provider.Provide(r.Context(), authorization.accessKeyID)
 	if err != nil {
 		return v2ReaderOptions{}, err
@@ -304,10 +303,7 @@ func (v2 *V2) verify(r *http.Request, virtualHostedBucket string) (v2ReaderOptio
 		return v2ReaderOptions{}, ErrSignatureDoesNotMatch
 	}
 
-	return v2ReaderOptions{
-		sumAlgos:          integritySumAlgos,
-		expectedIntegrity: integrity,
-	}, nil
+	return v2ReaderOptions{}, nil
 }
 
 func (v2 *V2) verifyPresigned(r *http.Request, query url.Values, virtualHostedBucket string) (v2ReaderOptions, error) {
@@ -333,11 +329,6 @@ func (v2 *V2) verifyPresigned(r *http.Request, query url.Values, virtualHostedBu
 		)
 	}
 
-	integritySumAlgos, integrity, err := v2.determineIntegrity(r.Header)
-	if err != nil {
-		return v2ReaderOptions{}, err
-	}
-
 	secretAccessKey, err := v2.provider.Provide(r.Context(), query.Get(queryAWSAccessKeyId))
 	if err != nil {
 		return v2ReaderOptions{}, err
@@ -347,10 +338,7 @@ func (v2 *V2) verifyPresigned(r *http.Request, query url.Values, virtualHostedBu
 		return v2ReaderOptions{}, ErrSignatureDoesNotMatch
 	}
 
-	return v2ReaderOptions{
-		sumAlgos:          integritySumAlgos,
-		expectedIntegrity: integrity,
-	}, nil
+	return v2ReaderOptions{}, nil
 }
 
 func (v2 *V2) Verify(r *http.Request, virtualHostedBucket string) (*V2Reader, error) {

@@ -37,7 +37,7 @@ func (v2v4 *V2V4) Verify(r *http.Request, virtualHostedBucket string) (Reader, e
 			if err != nil {
 				return nil, err
 			}
-			return newV4Reader(file, data), nil
+			return newV4Reader(file, data)
 		} else if form.Has(queryAWSAccessKeyId) {
 			data, err := v2v4.v2.verifyPost(r.Context(), form)
 			if err != nil {
@@ -51,7 +51,7 @@ func (v2v4 *V2V4) Verify(r *http.Request, virtualHostedBucket string) (Reader, e
 			if err != nil {
 				return nil, err
 			}
-			return newV4Reader(r.Body, data), nil
+			return newV4Reader(r.Body, data)
 		}
 		data, err := v2v4.v2.verify(r, virtualHostedBucket)
 		if err != nil {
@@ -63,7 +63,7 @@ func (v2v4 *V2V4) Verify(r *http.Request, virtualHostedBucket string) (Reader, e
 		if err != nil {
 			return nil, err
 		}
-		return newV4Reader(r.Body, data), nil
+		return newV4Reader(r.Body, data)
 	} else if query := r.URL.Query(); query.Has(queryAWSAccessKeyId) {
 		data, err := v2v4.v2.verifyPresigned(r, query, virtualHostedBucket)
 		if err != nil {

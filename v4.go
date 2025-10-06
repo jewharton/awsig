@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"hash"
 	"io"
 	"maps"
@@ -23,7 +24,6 @@ const (
 	headerHost                     = "host"
 	headerTransferEncoding         = "transfer-encoding"
 	headerXAmzDecodedContentLength = xAmzHeaderPrefix + "decoded-content-length"
-	headerXAmzTrailer              = xAmzHeaderPrefix + "trailer"
 
 	v4AuthorizationHeaderCredentialPrefix     = "Credential="
 	v4AuthorizationHeaderSignedHeadersPrefix  = "SignedHeaders="
@@ -64,7 +64,7 @@ type V4Reader struct {
 	unsigned        bool
 	multipleChunks  bool
 	trailingHeader  bool
-	trailingSumAlgo checksumAlgorithm
+	trailingSumAlgo *ChecksumAlgorithm
 
 	signingAlgo     v4SigningAlgorithm
 	dateTime        string
@@ -86,12 +86,11 @@ type v4ReaderOptions struct {
 	dateTime        string
 	scope           scope
 	parsedOptions   parsedXAmzContentSHA256
-	parsedIntegrity parsedIntegrity
 	secretAccessKey string
 	seedSignature   signatureV4
 }
 
-func newV4Reader(r io.Reader, data v4ReaderOptions) *V4Reader {
+func newV4Reader(r io.Reader, data v4ReaderOptions) (*V4Reader, error) {
 	var (
 		ir          *integrityReader
 		chunkSHA256 hash.Hash
@@ -99,28 +98,71 @@ func newV4Reader(r io.Reader, data v4ReaderOptions) *V4Reader {
 
 	if !data.parsedOptions.unsigned && data.parsedOptions.streaming {
 		chunkSHA256 = sha256.New()
-		ir = newIntegrityReader(io.TeeReader(r, chunkSHA256), data.parsedIntegrity.sumAlgos)
+		ir = newIntegrityReader(io.TeeReader(r, chunkSHA256))
 	} else {
-		ir = newIntegrityReader(r, data.parsedIntegrity.sumAlgos)
+		ir = newIntegrityReader(r)
 	}
 
-	return &V4Reader{
+	v4r := &V4Reader{
 		r:                      r,
 		ir:                     ir,
 		form:                   data.form,
 		unsigned:               data.parsedOptions.unsigned,
 		multipleChunks:         data.parsedOptions.streaming,
 		trailingHeader:         data.parsedOptions.trailer,
-		trailingSumAlgo:        data.parsedIntegrity.trailingSumAlgo,
 		signingAlgo:            data.parsedOptions.signingAlgo,
 		dateTime:               data.dateTime,
 		scope:                  data.scope,
 		secretAccessKey:        data.secretAccessKey,
-		integrity:              data.parsedIntegrity.integrity,
+		integrity:              make(expectedIntegrity),
 		decodedContentLength:   data.parsedOptions.decodedContentLength,
 		chunkSHA256:            chunkSHA256,
 		chunkPreviousSignature: data.seedSignature,
 	}
+
+	if data.parsedOptions.sumRequest.valid() {
+		return v4r, v4r.RequestChecksums(data.parsedOptions.sumRequest)
+	}
+
+	return v4r, nil
+}
+
+func (r *V4Reader) PostForm() PostForm {
+	return r.form
+}
+
+func (r *V4Reader) RequestChecksums(requests ...ChecksumRequest) error {
+	for i, req := range requests {
+		if !req.valid() {
+			return fmt.Errorf("uninitialized request: %d", i)
+		}
+		switch req.trailing {
+		case true:
+			if !r.trailingHeader {
+				return fmt.Errorf("could not set %d/%s as trailing: not expecting a trailing header", i, req.algorithm)
+			}
+			if r.trailingSumAlgo != nil {
+				return fmt.Errorf("could not set %d/%s as trailing: already set to %s", i, req.algorithm, *r.trailingSumAlgo)
+			}
+			r.trailingSumAlgo = &req.algorithm
+			fallthrough
+		default:
+			if err := r.ir.addAlgorithm(req.algorithm); err != nil {
+				return fmt.Errorf("could not add %d/%s: %w", i, req.algorithm, err)
+			}
+			if !req.trailing {
+				r.integrity.setDecoded(req.algorithm, req.value)
+			}
+		}
+	}
+	return nil
+}
+
+func (r *V4Reader) verifyTrailingHeader() error {
+	if r.trailingHeader && r.trailingSumAlgo == nil {
+		return errors.New("the trailing checksum algorithm must be specified when the request contains a trailing header")
+	}
+	return nil
 }
 
 func (r *V4Reader) consumeLF(buf []byte) error {
@@ -246,11 +288,23 @@ func (r *V4Reader) readChunkMeta(buf []byte) (int, signatureV4, error) {
 	return length, signature, nil
 }
 
+func (r *V4Reader) currentChunkSignatureData() signatureV4Data {
+	return signatureV4Data{
+		algorithm:       r.signingAlgo,
+		algorithmSuffix: algorithmSuffixPayload,
+		dateTime:        r.dateTime,
+		scope:           r.scope,
+		previous:        r.chunkPreviousSignature,
+		digest:          r.chunkSHA256.Sum(nil),
+	}
+}
+
 func (r *V4Reader) readChunkTrailer(buf []byte) error {
-	name := chunkTrailingHeaderPrefix + r.trailingSumAlgo.String() + ":"
+	algo := *r.trailingSumAlgo
+	name := chunkTrailingHeaderPrefix + algo.String() + ":"
 
 	length := len(name)
-	length += r.trailingSumAlgo.base64Length()
+	length += algo.base64Length()
 
 	buf, err := reuseBuffer(buf, length+1) // +1 for the trailing LF
 	if err != nil {
@@ -265,7 +319,9 @@ func (r *V4Reader) readChunkTrailer(buf []byte) error {
 		return ErrIncompleteBody
 	}
 
-	r.integrity.addEncoded(r.trailingSumAlgo, buf[len(name):len(buf)-1])
+	if err = r.integrity.setEncoded(algo, buf[len(name):len(buf)-1]); err != nil {
+		return ErrInvalidDigest
+	}
 
 	var (
 		trailingByte = buf[len(buf)-1]
@@ -316,17 +372,6 @@ func (r *V4Reader) readChunkTrailer(buf []byte) error {
 	return nil
 }
 
-func (r *V4Reader) currentChunkSignatureData() signatureV4Data {
-	return signatureV4Data{
-		algorithm:       r.signingAlgo,
-		algorithmSuffix: algorithmSuffixPayload,
-		dateTime:        r.dateTime,
-		scope:           r.scope,
-		previous:        r.chunkPreviousSignature,
-		digest:          r.chunkSHA256.Sum(nil),
-	}
-}
-
 func (r *V4Reader) close(buf []byte) error {
 	if r.decodedContentLength != 0 {
 		return ErrIncompleteBody
@@ -354,7 +399,7 @@ func (r *V4Reader) close(buf []byte) error {
 	}
 
 	if err := r.ir.verify(r.integrity); err != nil {
-		return err
+		return nestError(ErrBadDigest, "verify failed: %w", err)
 	}
 
 	return io.EOF
@@ -364,9 +409,13 @@ func (r *V4Reader) Read(p []byte) (n int, err error) {
 	if !r.multipleChunks { // fast path for single chunk
 		if n, err = r.ir.Read(p); errors.Is(err, io.EOF) {
 			if err := r.ir.verify(r.integrity); err != nil {
-				return n, err
+				return n, nestError(ErrBadDigest, "verify failed: %w", err)
 			}
 		}
+		return n, err
+	}
+
+	if err = r.verifyTrailingHeader(); err != nil {
 		return n, err
 	}
 
@@ -432,11 +481,7 @@ func (r *V4Reader) Read(p []byte) (n int, err error) {
 	return n, err
 }
 
-func (r *V4Reader) PostForm() PostForm {
-	return r.form
-}
-
-func (r *V4Reader) Checksums() (Checksums, error) {
+func (r *V4Reader) Checksums() (map[ChecksumAlgorithm][]byte, error) {
 	return r.ir.checksums()
 }
 
@@ -752,6 +797,8 @@ type parsedXAmzContentSHA256 struct {
 	signingAlgo          v4SigningAlgorithm
 	trailer              bool
 	decodedContentLength int
+
+	sumRequest ChecksumRequest
 }
 
 func (v4 *V4) decodedContentLength(headers http.Header) (int, error) {
@@ -833,120 +880,17 @@ func (v4 *V4) parseXAmzContentSHA256(rawXAmzContentSHA256 string, headers http.H
 		)
 	}
 
-	return parsedXAmzContentSHA256{}, nil
-}
-
-type parsedIntegrity struct {
-	sumAlgos        []checksumAlgorithm
-	trailingSumAlgo checksumAlgorithm
-	integrity       expectedIntegrity
-}
-
-func (v4 *V4) determineIntegrity(rawXAmzContentSHA256 string, options parsedXAmzContentSHA256, headers http.Header) (parsedIntegrity, error) {
-	// thanks, Ermiya Eskandary (https://stackoverflow.com/a/77663532)!
-
-	ret := parsedIntegrity{
-		integrity: newExpectedIntegrity(),
-	}
-
-	rawAlgorithm := headers.Get(headerXAmzSdkChecksumAlgorithm)
-	headerToAlgo := map[string]checksumAlgorithm{
-		headerXAmzChecksumCrc32:     algorithmCRC32,
-		headerXAmzChecksumCrc32c:    algorithmCRC32C,
-		headerXAmzChecksumCrc64nvme: algorithmCRC64NVME,
-		headerXAmzChecksumSha1:      algorithmSHA1,
-		headerXAmzChecksumSha256:    algorithmSHA256,
-	}
-
-	var (
-		specifiedAlgorithm *checksumAlgorithm
-		rawChecksum        string
-	)
-	for h, a := range headerToAlgo {
-		c := headers.Get(h)
-		if specifiedAlgorithm != nil && c != "" {
-			return parsedIntegrity{}, nestError(
-				ErrInvalidDigest,
-				"expecting a single x-amz-checksum- header; multiple checksum types are not allowed",
-			)
-		}
-		if c != "" {
-			if rawAlgorithm != "" && !strings.EqualFold(rawAlgorithm, a.String()) {
-				return parsedIntegrity{}, nestError(
-					ErrInvalidDigest,
-					"the %s header does not match the %s header", headerXAmzSdkChecksumAlgorithm, h,
-				)
-			}
-			specifiedAlgorithm, rawChecksum = &a, c
-		}
-	}
-
-	if rawAlgorithm != "" && specifiedAlgorithm == nil {
-		return parsedIntegrity{}, nestError(
-			ErrMissingSecurityHeader,
-			"a corresponding x-amz-checksum- header is missing",
+	sumRequest, err := NewChecksumRequest(algorithmHashedPayload, rawXAmzContentSHA256)
+	if err != nil {
+		return parsedXAmzContentSHA256{}, nestError(
+			ErrInvalidRequest,
+			"the %s header does not contain a valid value: %w", headerXAmzContentSha256, err,
 		)
 	}
 
-	if trailerValue := headers.Get(headerXAmzTrailer); trailerValue != "" {
-		if specifiedAlgorithm != nil {
-			return parsedIntegrity{}, nestError(
-				ErrInvalidRequest,
-				"the x-amz-checksum- header is not allowed when the %s header is present", headerXAmzTrailer,
-			)
-		}
-		if !options.streaming || !options.trailer {
-			return parsedIntegrity{}, nestError(
-				ErrInvalidRequest,
-				"the %s header is only allowed for streaming requests with trailer signatures", headerXAmzTrailer,
-			)
-		}
-
-		a, ok := headerToAlgo[trailerValue]
-		if !ok {
-			return parsedIntegrity{}, nestError(
-				ErrInvalidRequest,
-				"the %s header does not contain currently supported values", headerXAmzTrailer,
-			)
-		}
-
-		if rawAlgorithm != "" && !strings.EqualFold(rawAlgorithm, a.String()) {
-			return parsedIntegrity{}, nestError(
-				ErrInvalidDigest,
-				"the %s header does not match the %s header", headerXAmzSdkChecksumAlgorithm, headerXAmzTrailer,
-			)
-		}
-
-		specifiedAlgorithm = &a
-	} else if options.trailer {
-		return parsedIntegrity{}, nestError(
-			ErrMissingSecurityHeader,
-			"the %s header is missing", headerXAmzTrailer,
-		)
-	}
-
-	if specifiedAlgorithm != nil {
-		ret.sumAlgos = append(ret.sumAlgos, *specifiedAlgorithm)
-		if options.trailer {
-			ret.trailingSumAlgo = *specifiedAlgorithm
-		} else {
-			ret.integrity.addEncodedString(*specifiedAlgorithm, rawChecksum)
-		}
-	} else {
-		ret.sumAlgos = append(ret.sumAlgos, algorithmCRC64NVME)
-	}
-
-	if !options.unsigned && !options.streaming {
-		ret.sumAlgos = append(ret.sumAlgos, algorithmHashedPayload)
-		ret.integrity.addEncodedString(algorithmHashedPayload, rawXAmzContentSHA256)
-	}
-
-	if contentMD5 := headers.Get(headerContentMD5); contentMD5 != "" {
-		ret.sumAlgos = append(ret.sumAlgos, algorithmMD5)
-		ret.integrity.addEncodedString(algorithmMD5, contentMD5)
-	}
-
-	return ret, nil
+	return parsedXAmzContentSHA256{
+		sumRequest: sumRequest,
+	}, nil
 }
 
 func (v4 *V4) canonicalRequestHash(r *http.Request, query url.Values, signedHeaders []string, hashedPayload string) []byte {
@@ -1066,12 +1010,6 @@ func (v4 *V4) verifyPost(ctx context.Context, form PostForm) (v4ReaderOptions, e
 		)
 	}
 
-	var integrity parsedIntegrity
-	integrity.sumAlgos, integrity.integrity, err = determinePostIntegrity(form)
-	if err != nil {
-		return v4ReaderOptions{}, err
-	}
-
 	secretAccessKey, err := v4.provider.Provide(ctx, credential.accessKeyID)
 	if err != nil {
 		return v4ReaderOptions{}, err
@@ -1093,7 +1031,6 @@ func (v4 *V4) verifyPost(ctx context.Context, form PostForm) (v4ReaderOptions, e
 		dateTime:        rawDate,
 		scope:           credential.scope,
 		parsedOptions:   parsedXAmzContentSHA256{unsigned: true},
-		parsedIntegrity: integrity,
 		secretAccessKey: secretAccessKey,
 		seedSignature:   signature,
 	}, nil
@@ -1130,11 +1067,6 @@ func (v4 *V4) verify(r *http.Request) (v4ReaderOptions, error) {
 		return v4ReaderOptions{}, err
 	}
 
-	integrity, err := v4.determineIntegrity(rawXAmzContentSHA256, options, r.Header)
-	if err != nil {
-		return v4ReaderOptions{}, err
-	}
-
 	secretAccessKey, err := v4.provider.Provide(r.Context(), authorization.credential.accessKeyID)
 	if err != nil {
 		return v4ReaderOptions{}, err
@@ -1159,7 +1091,6 @@ func (v4 *V4) verify(r *http.Request) (v4ReaderOptions, error) {
 		dateTime:        rawDate,
 		scope:           authorization.credential.scope,
 		parsedOptions:   options,
-		parsedIntegrity: integrity,
 		secretAccessKey: secretAccessKey,
 		seedSignature:   signature,
 	}, nil
@@ -1215,11 +1146,6 @@ func (v4 *V4) verifyPresigned(r *http.Request, query url.Values) (v4ReaderOption
 
 	rawXAmzContentSHA256, options := unsignedPayload, parsedXAmzContentSHA256{unsigned: true}
 
-	integrity, err := v4.determineIntegrity(rawXAmzContentSHA256, options, r.Header)
-	if err != nil {
-		return v4ReaderOptions{}, err
-	}
-
 	secretAccessKey, err := v4.provider.Provide(r.Context(), authorization.credential.accessKeyID)
 	if err != nil {
 		return v4ReaderOptions{}, err
@@ -1245,7 +1171,6 @@ func (v4 *V4) verifyPresigned(r *http.Request, query url.Values) (v4ReaderOption
 		dateTime:        rawDate,
 		scope:           authorization.credential.scope,
 		parsedOptions:   options,
-		parsedIntegrity: integrity,
 		secretAccessKey: secretAccessKey,
 		seedSignature:   signature,
 	}, nil
@@ -1269,19 +1194,19 @@ func (v4 *V4) Verify(r *http.Request) (*V4Reader, error) {
 		if err != nil {
 			return nil, err
 		}
-		return newV4Reader(file, data), nil
+		return newV4Reader(file, data)
 	} else if r.Header.Get(headerAuthorization) != "" {
 		data, err := v4.verify(r)
 		if err != nil {
 			return nil, err
 		}
-		return newV4Reader(r.Body, data), nil
+		return newV4Reader(r.Body, data)
 	} else if query := r.URL.Query(); query.Has(queryXAmzAlgorithm) {
 		data, err := v4.verifyPresigned(r, query)
 		if err != nil {
 			return nil, err
 		}
-		return newV4Reader(r.Body, data), nil
+		return newV4Reader(r.Body, data)
 	}
 
 	return nil, ErrMissingAuthenticationToken

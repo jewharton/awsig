@@ -166,12 +166,23 @@ func testV4[T Reader](t *testing.T, newV4 func(CredentialsProvider, func() time.
 			req.Header.Add("x-amz-trailer", "x-amz-checksum-crc32c")
 			req.Header.Add("Content-Length", "66824")
 
+			cr, err := NewTrailingChecksumRequest(AlgorithmCRC32C)
+			assert.NoError(t, err)
+
 			r, err := v4.Verify(req, "")
 			assert.NoError(t, err)
+			assert.NoError(t, r.RequestChecksums(cr))
 
 			b, err := io.ReadAll(r)
 			assert.NoError(t, err)
 			assert.Equal(t, bytes.Repeat([]byte{'a'}, 65*1024), b)
+
+			checksums, err := r.Checksums()
+			assert.NoError(t, err)
+			assert.Equal(t, map[ChecksumAlgorithm][]byte{
+				AlgorithmCRC32C: {0xb0, 0xe3, 0xbc, 0xfd},
+				AlgorithmMD5:    {0xda, 0x0d, 0x2e, 0x17, 0xcd, 0x5a, 0x8f, 0x14, 0x63, 0x3c, 0x6b, 0x4a, 0xeb, 0xad, 0x7e, 0x02},
+			}, checksums)
 		})
 		t.Run("unsigned", func(t *testing.T) {
 			body := bytes.NewBuffer(nil)
@@ -202,12 +213,23 @@ func testV4[T Reader](t *testing.T, newV4 func(CredentialsProvider, func() time.
 			req.Header.Add("Content-Length", strconv.Itoa(body.Len()))
 			req.Header.Add("x-amz-date", "20130524T000000Z")
 
+			cr, err := NewTrailingChecksumRequest(AlgorithmCRC32)
+			assert.NoError(t, err)
+
 			r, err := v4.Verify(req, "")
 			assert.NoError(t, err)
+			assert.NoError(t, r.RequestChecksums(cr))
 
 			b, err := io.ReadAll(r)
 			assert.NoError(t, err)
 			assert.Equal(t, bytes.Repeat([]byte{'a'}, 17*1024), b)
+
+			checksums, err := r.Checksums()
+			assert.NoError(t, err)
+			assert.Equal(t, map[ChecksumAlgorithm][]byte{
+				AlgorithmCRC32: {0xb3, 0x74, 0x85, 0x09},
+				AlgorithmMD5:   {0xdd, 0x1b, 0x90, 0x4c, 0x0c, 0x06, 0xf8, 0x01, 0x56, 0xc1, 0x38, 0x10, 0xa0, 0x4d, 0xbb, 0x94},
+			}, checksums)
 		})
 	})
 	t.Run("presigned", func(t *testing.T) {
