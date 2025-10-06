@@ -139,22 +139,22 @@ func (v2 *V2) parseTime(main, alt string) (time.Time, error) {
 	return parsed, nil
 }
 
-type parsedAuthorizationV2 struct {
+type v2ParsedAuthorization struct {
 	accessKeyID string
 	signature   signatureV2
 }
 
-func (v2 *V2) parseAuthorization(rawAuthorization string) (parsedAuthorizationV2, error) {
+func (v2 *V2) parseAuthorization(rawAuthorization string) (v2ParsedAuthorization, error) {
 	rawAlgorithm, afterAlgorithm, ok := strings.Cut(rawAuthorization, " ")
 	if !ok {
-		return parsedAuthorizationV2{}, nestError(
+		return v2ParsedAuthorization{}, nestError(
 			ErrAuthorizationHeaderMalformed,
 			"the %s header does not contain expected parts", headerAuthorization,
 		)
 	}
 
 	if rawAlgorithm != "AWS" {
-		return parsedAuthorizationV2{}, nestError(
+		return v2ParsedAuthorization{}, nestError(
 			ErrUnsupportedSignature,
 			"the %s header does not contain a valid signing algorithm", headerAuthorization,
 		)
@@ -162,7 +162,7 @@ func (v2 *V2) parseAuthorization(rawAuthorization string) (parsedAuthorizationV2
 
 	accessKeyID, rawSignature, ok := strings.Cut(afterAlgorithm, ":")
 	if !ok {
-		return parsedAuthorizationV2{}, nestError(
+		return v2ParsedAuthorization{}, nestError(
 			ErrAuthorizationHeaderMalformed,
 			"the %s header does not contain expected parts", headerAuthorization,
 		)
@@ -170,13 +170,13 @@ func (v2 *V2) parseAuthorization(rawAuthorization string) (parsedAuthorizationV2
 
 	signature, err := newSignatureV2FromEncoded(rawSignature)
 	if err != nil {
-		return parsedAuthorizationV2{}, nestError(
+		return v2ParsedAuthorization{}, nestError(
 			ErrInvalidSignature,
 			"the %s header does not contain a valid signature: %w", headerAuthorization, err,
 		)
 	}
 
-	return parsedAuthorizationV2{
+	return v2ParsedAuthorization{
 		accessKeyID: accessKeyID,
 		signature:   signature,
 	}, nil

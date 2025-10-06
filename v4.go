@@ -754,17 +754,17 @@ func (v4 *V4) parseSignature(rawSignature string, skipPrefixCheck bool) (signatu
 	return signature, nil
 }
 
-type parsedAuthorization struct {
+type v4ParsedAuthorization struct {
 	signingAlgo   v4SigningAlgorithm
 	credential    parsedCredential
 	signedHeaders []string
 	signature     signatureV4
 }
 
-func (v4 *V4) parseAuthorization(rawAuthorization string, expectedDate time.Time, headers http.Header) (parsedAuthorization, error) {
+func (v4 *V4) parseAuthorization(rawAuthorization string, expectedDate time.Time, headers http.Header) (v4ParsedAuthorization, error) {
 	rawAlgorithm, afterAlgorithm, ok := strings.Cut(rawAuthorization, " ")
 	if !ok {
-		return parsedAuthorization{}, nestError(
+		return v4ParsedAuthorization{}, nestError(
 			ErrAuthorizationHeaderMalformed,
 			"the %s header does not contain expected parts", headerAuthorization,
 		)
@@ -772,13 +772,13 @@ func (v4 *V4) parseAuthorization(rawAuthorization string, expectedDate time.Time
 
 	signingAlgo, err := v4.parseSigningAlgo(rawAlgorithm)
 	if err != nil {
-		return parsedAuthorization{}, err
+		return v4ParsedAuthorization{}, err
 	}
 
 	pairs := strings.SplitN(afterAlgorithm, ",", 3)
 
 	if len(pairs) != 3 {
-		return parsedAuthorization{}, nestError(
+		return v4ParsedAuthorization{}, nestError(
 			ErrAuthorizationHeaderMalformed,
 			"the %s header does not contain expected key=value pairs", headerAuthorization,
 		)
@@ -786,20 +786,20 @@ func (v4 *V4) parseAuthorization(rawAuthorization string, expectedDate time.Time
 
 	credential, err := v4.parseCredential(pairs[0], expectedDate, false)
 	if err != nil {
-		return parsedAuthorization{}, err
+		return v4ParsedAuthorization{}, err
 	}
 
 	signedHeaders, err := v4.parseSignedHeaders(pairs[1], headers, false)
 	if err != nil {
-		return parsedAuthorization{}, err
+		return v4ParsedAuthorization{}, err
 	}
 
 	signature, err := v4.parseSignature(pairs[2], false)
 	if err != nil {
-		return parsedAuthorization{}, err
+		return v4ParsedAuthorization{}, err
 	}
 
-	return parsedAuthorization{
+	return v4ParsedAuthorization{
 		signingAlgo:   signingAlgo,
 		credential:    credential,
 		signedHeaders: signedHeaders,
@@ -807,28 +807,28 @@ func (v4 *V4) parseAuthorization(rawAuthorization string, expectedDate time.Time
 	}, nil
 }
 
-func (v4 *V4) parseAuthorizationFromQuery(query url.Values, expectedDate time.Time, headers http.Header) (parsedAuthorization, error) {
+func (v4 *V4) parseAuthorizationFromQuery(query url.Values, expectedDate time.Time, headers http.Header) (v4ParsedAuthorization, error) {
 	signingAlgo, err := v4.parseSigningAlgo(query.Get(queryXAmzAlgorithm))
 	if err != nil {
-		return parsedAuthorization{}, err
+		return v4ParsedAuthorization{}, err
 	}
 
 	credential, err := v4.parseCredential(query.Get(queryXAmzCredential), expectedDate, true)
 	if err != nil {
-		return parsedAuthorization{}, err
+		return v4ParsedAuthorization{}, err
 	}
 
 	signedHeaders, err := v4.parseSignedHeaders(query.Get(queryXAmzSignedHeaders), headers, true)
 	if err != nil {
-		return parsedAuthorization{}, err
+		return v4ParsedAuthorization{}, err
 	}
 
 	signature, err := v4.parseSignature(query.Get(queryXAmzSignature), true)
 	if err != nil {
-		return parsedAuthorization{}, err
+		return v4ParsedAuthorization{}, err
 	}
 
-	return parsedAuthorization{
+	return v4ParsedAuthorization{
 		signingAlgo:   signingAlgo,
 		credential:    credential,
 		signedHeaders: signedHeaders,
