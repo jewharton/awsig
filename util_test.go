@@ -227,7 +227,7 @@ func TestParseMultipartFormUntilFile(t *testing.T) {
 	})
 }
 
-type verifier[T any] interface {
+type verifier[T VerifiedRequest] interface {
 	Verify(r *http.Request, virtualHostedBucket string) (T, error)
 }
 

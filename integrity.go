@@ -135,29 +135,12 @@ func (i expectedIntegrity) setEncodedString(a ChecksumAlgorithm, value string) e
 type integrityReader struct {
 	r io.Reader
 
-	newReader  func([]ChecksumAlgorithm) (io.Reader, map[ChecksumAlgorithm]hash.Hash)
-	algorithms []ChecksumAlgorithm
-
 	hashes map[ChecksumAlgorithm]hash.Hash
 	sums   map[ChecksumAlgorithm][]byte
 }
 
 func (r *integrityReader) Read(p []byte) (n int, err error) {
-	if r.r == nil {
-		r.r, r.hashes = r.newReader(r.algorithms)
-	}
 	return r.r.Read(p)
-}
-
-func (r *integrityReader) addAlgorithm(algorithm ChecksumAlgorithm) error {
-	if r.r != nil {
-		return errors.New("cannot add algorithm after read has started")
-	}
-	if slices.Contains(r.algorithms, algorithm) {
-		return errors.New("algorithm already added")
-	}
-	r.algorithms = append(r.algorithms, algorithm)
-	return nil
 }
 
 func (r *integrityReader) checksums() (map[ChecksumAlgorithm][]byte, error) {
@@ -200,47 +183,46 @@ func (r *integrityReader) verify(integrity expectedIntegrity) error {
 	return errs
 }
 
-func newIntegrityReader(r io.Reader) *integrityReader {
-	return &integrityReader{
-		newReader: func(algorithms []ChecksumAlgorithm) (io.Reader, map[ChecksumAlgorithm]hash.Hash) {
-			var (
-				hashes  = make(map[ChecksumAlgorithm]hash.Hash)
-				writers []io.Writer
-			)
-
-			h := md5.New()
-			hashes[AlgorithmMD5] = h // MD5 is always computed
-			writers = append(writers, h)
-
-			for _, a := range algorithms {
-				switch a {
-				case AlgorithmCRC32:
-					h = crc32.NewIEEE()
-					hashes[AlgorithmCRC32] = h
-					writers = append(writers, h)
-				case AlgorithmCRC32C:
-					h = crc32.New(crc32.MakeTable(crc32.Castagnoli))
-					hashes[AlgorithmCRC32C] = h
-					writers = append(writers, h)
-				case AlgorithmCRC64NVME:
-					h = crc64.New(crc64.MakeTable(0x9a6c_9329_ac4b_c9b5))
-					hashes[AlgorithmCRC64NVME] = h
-					writers = append(writers, h)
-				case AlgorithmSHA1:
-					h = sha1.New()
-					hashes[AlgorithmSHA1] = h
-					writers = append(writers, h)
-				case AlgorithmSHA256, algorithmHashedPayload:
-					h = sha256.New()
-					hashes[AlgorithmSHA256] = h
-					hashes[algorithmHashedPayload] = h
-					writers = append(writers, h)
-				}
-			}
-
-			return io.TeeReader(r, io.MultiWriter(writers...)), hashes
-		},
+func newIntegrityReader(r io.Reader, algorithms []ChecksumAlgorithm) *integrityReader {
+	ir := &integrityReader{
+		hashes: make(map[ChecksumAlgorithm]hash.Hash),
 	}
+
+	var writers []io.Writer
+
+	h := md5.New()
+	ir.hashes[AlgorithmMD5] = h // MD5 is always computed
+	writers = append(writers, h)
+
+	for _, a := range algorithms {
+		switch a {
+		case AlgorithmCRC32:
+			h = crc32.NewIEEE()
+			ir.hashes[AlgorithmCRC32] = h
+			writers = append(writers, h)
+		case AlgorithmCRC32C:
+			h = crc32.New(crc32.MakeTable(crc32.Castagnoli))
+			ir.hashes[AlgorithmCRC32C] = h
+			writers = append(writers, h)
+		case AlgorithmCRC64NVME:
+			h = crc64.New(crc64.MakeTable(0x9a6c_9329_ac4b_c9b5))
+			ir.hashes[AlgorithmCRC64NVME] = h
+			writers = append(writers, h)
+		case AlgorithmSHA1:
+			h = sha1.New()
+			ir.hashes[AlgorithmSHA1] = h
+			writers = append(writers, h)
+		case AlgorithmSHA256, algorithmHashedPayload:
+			h = sha256.New()
+			ir.hashes[AlgorithmSHA256] = h
+			ir.hashes[algorithmHashedPayload] = h
+			writers = append(writers, h)
+		}
+	}
+
+	ir.r = io.TeeReader(r, io.MultiWriter(writers...))
+
+	return ir
 }
 
 func decodeChecksum(a ChecksumAlgorithm, v []byte) ([]byte, error) {

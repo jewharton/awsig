@@ -17,7 +17,7 @@ import (
 )
 
 func TestV2(t *testing.T) {
-	newV2 := func(provider CredentialsProvider, now func() time.Time) verifier[*V2Reader] {
+	newV2 := func(provider CredentialsProvider, now func() time.Time) verifier[*V2VerifiedRequest] {
 		v2 := NewV2(provider)
 		v2.now = now
 		return v2
@@ -25,7 +25,7 @@ func TestV2(t *testing.T) {
 	testV2(t, newV2)
 }
 
-func testV2[T Reader](t *testing.T, newV2 func(CredentialsProvider, func() time.Time) verifier[T]) {
+func testV2[T VerifiedRequest](t *testing.T, newV2 func(CredentialsProvider, func() time.Time) verifier[T]) {
 	provider := simpleCredentialsProvider{
 		accessKeyID:     "AKIAIOSFODNN7EXAMPLE",
 		secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
@@ -38,7 +38,10 @@ func testV2[T Reader](t *testing.T, newV2 func(CredentialsProvider, func() time.
 
 		v2 := newV2(provider, dummyNow(2007, time.March, 27, 19, 36, 42))
 
-		r, err := v2.Verify(req, "awsexamplebucket1")
+		vr, err := v2.Verify(req, "awsexamplebucket1")
+		assert.NoError(t, err)
+
+		r, err := vr.Reader()
 		assert.NoError(t, err)
 
 		p := make([]byte, 32*1024)
@@ -60,7 +63,10 @@ func testV2[T Reader](t *testing.T, newV2 func(CredentialsProvider, func() time.
 
 		v2 := newV2(provider, dummyNow(2007, time.March, 27, 21, 15, 45))
 
-		r, err := v2.Verify(req, "awsexamplebucket1")
+		vr, err := v2.Verify(req, "awsexamplebucket1")
+		assert.NoError(t, err)
+
+		r, err := vr.Reader()
 		assert.NoError(t, err)
 
 		b, err := io.ReadAll(r)
@@ -75,7 +81,10 @@ func testV2[T Reader](t *testing.T, newV2 func(CredentialsProvider, func() time.
 
 		v2 := newV2(provider, dummyNow(2007, time.March, 27, 19, 42, 41))
 
-		r, err := v2.Verify(req, "awsexamplebucket1")
+		vr, err := v2.Verify(req, "awsexamplebucket1")
+		assert.NoError(t, err)
+
+		r, err := vr.Reader()
 		assert.NoError(t, err)
 
 		p := make([]byte, 32*1024)
@@ -90,7 +99,10 @@ func testV2[T Reader](t *testing.T, newV2 func(CredentialsProvider, func() time.
 
 		v2 := newV2(provider, dummyNow(2007, time.March, 27, 19, 44, 46))
 
-		r, err := v2.Verify(req, "awsexamplebucket1")
+		vr, err := v2.Verify(req, "awsexamplebucket1")
+		assert.NoError(t, err)
+
+		r, err := vr.Reader()
 		assert.NoError(t, err)
 
 		p := make([]byte, 32*1024)
@@ -118,7 +130,10 @@ func testV2[T Reader](t *testing.T, newV2 func(CredentialsProvider, func() time.
 
 		v2 := newV2(provider, dummyNow(2007, time.March, 28, 1, 29, 59))
 
-		r, err := v2.Verify(req, "")
+		vr, err := v2.Verify(req, "")
+		assert.NoError(t, err)
+
+		r, err := vr.Reader()
 		assert.NoError(t, err)
 
 		p := make([]byte, 32*1024)
@@ -133,7 +148,10 @@ func testV2[T Reader](t *testing.T, newV2 func(CredentialsProvider, func() time.
 
 		v2 := newV2(provider, dummyNow(2007, time.March, 28, 1, 49, 49))
 
-		r, err := v2.Verify(req, "")
+		vr, err := v2.Verify(req, "")
+		assert.NoError(t, err)
+
+		r, err := vr.Reader()
 		assert.NoError(t, err)
 
 		p := make([]byte, 32*1024)
@@ -153,7 +171,10 @@ func testV2[T Reader](t *testing.T, newV2 func(CredentialsProvider, func() time.
 
 		v2 := newV2(provider2, dummyNow(2006, time.March, 9, 7, 25, 20))
 
-		r, err := v2.Verify(req, "")
+		vr, err := v2.Verify(req, "")
+		assert.NoError(t, err)
+
+		r, err := vr.Reader()
 		assert.NoError(t, err)
 
 		p := make([]byte, 32*1024)
@@ -166,7 +187,10 @@ func testV2[T Reader](t *testing.T, newV2 func(CredentialsProvider, func() time.
 
 		v2 := newV2(provider, dummyNow(2007, time.March, 29, 3, 40, 19))
 
-		r, err := v2.Verify(req, "johnsmith")
+		vr, err := v2.Verify(req, "johnsmith")
+		assert.NoError(t, err)
+
+		r, err := vr.Reader()
 		assert.NoError(t, err)
 
 		p := make([]byte, 32*1024)
@@ -245,7 +269,10 @@ func testV2[T Reader](t *testing.T, newV2 func(CredentialsProvider, func() time.
 
 		v2 := newV2(provider3, time.Now)
 
-		r, err := v2.Verify(req, "johnsmith")
+		vr, err := v2.Verify(req, "johnsmith")
+		assert.NoError(t, err)
+
+		r, err := vr.Reader()
 		assert.NoError(t, err)
 
 		b, err := io.ReadAll(r)
@@ -296,7 +323,10 @@ func testV2[T Reader](t *testing.T, newV2 func(CredentialsProvider, func() time.
 
 		v2 := newV2(provider3, time.Now)
 
-		r, err := v2.Verify(req, "johnsmith")
+		vr, err := v2.Verify(req, "johnsmith")
+		assert.NoError(t, err)
+
+		r, err := vr.Reader()
 		assert.NoError(t, err)
 
 		b, err := io.ReadAll(r)

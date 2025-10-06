@@ -70,10 +70,13 @@ type CredentialsProvider interface {
 }
 
 type Reader interface {
-	PostForm() PostForm
-	RequestChecksums(...ChecksumRequest) error
 	io.Reader
 	Checksums() (map[ChecksumAlgorithm][]byte, error)
+}
+
+type VerifiedRequest interface {
+	PostForm() PostForm
+	Reader(...ChecksumRequest) (Reader, error)
 }
 
 type nestedError struct {

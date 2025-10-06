@@ -24,12 +24,12 @@ type v4Verifier struct {
 	v4 *V4
 }
 
-func (v *v4Verifier) Verify(r *http.Request, _ string) (*V4Reader, error) {
+func (v *v4Verifier) Verify(r *http.Request, _ string) (*V4VerifiedRequest, error) {
 	return v.v4.Verify(r)
 }
 
 func TestV4(t *testing.T) {
-	newV4 := func(provider CredentialsProvider, now func() time.Time) verifier[*V4Reader] {
+	newV4 := func(provider CredentialsProvider, now func() time.Time) verifier[*V4VerifiedRequest] {
 		v4 := NewV4(provider, testDefaultRegion, testDefaultService)
 		v4.now = now
 		return &v4Verifier{v4: v4}
@@ -37,7 +37,7 @@ func TestV4(t *testing.T) {
 	testV4(t, newV4)
 }
 
-func testV4[T Reader](t *testing.T, newV4 func(CredentialsProvider, func() time.Time) verifier[T]) {
+func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, func() time.Time) verifier[T]) {
 	provider := simpleCredentialsProvider{
 		accessKeyID:     "AKIAIOSFODNN7EXAMPLE",
 		secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
@@ -53,7 +53,10 @@ func testV4[T Reader](t *testing.T, newV4 func(CredentialsProvider, func() time.
 			req.Header.Add("x-amz-content-sha256", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
 			req.Header.Add("x-amz-date", "20130524T000000Z")
 
-			r, err := v4.Verify(req, "")
+			vr, err := v4.Verify(req, "")
+			assert.NoError(t, err)
+
+			r, err := vr.Reader()
 			assert.NoError(t, err)
 
 			p := make([]byte, 32*1024)
@@ -71,7 +74,10 @@ func testV4[T Reader](t *testing.T, newV4 func(CredentialsProvider, func() time.
 			req.Header.Add("x-amz-storage-class", "REDUCED_REDUNDANCY")
 			req.Header.Add("x-amz-content-sha256", "44ce7dd67c959e0d3524ffac1771dfbba87d2b6b4b4e99e42034a8b803f8b072")
 
-			r, err := v4.Verify(req, "")
+			vr, err := v4.Verify(req, "")
+			assert.NoError(t, err)
+
+			r, err := vr.Reader()
 			assert.NoError(t, err)
 
 			b, err := io.ReadAll(r)
@@ -84,7 +90,10 @@ func testV4[T Reader](t *testing.T, newV4 func(CredentialsProvider, func() time.
 			req.Header.Add("x-amz-date", "20130524T000000Z")
 			req.Header.Add("x-amz-content-sha256", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
 
-			r, err := v4.Verify(req, "")
+			vr, err := v4.Verify(req, "")
+			assert.NoError(t, err)
+
+			r, err := vr.Reader()
 			assert.NoError(t, err)
 
 			p := make([]byte, 32*1024)
@@ -98,7 +107,10 @@ func testV4[T Reader](t *testing.T, newV4 func(CredentialsProvider, func() time.
 			req.Header.Add("x-amz-date", "20130524T000000Z")
 			req.Header.Add("x-amz-content-sha256", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
 
-			r, err := v4.Verify(req, "")
+			vr, err := v4.Verify(req, "")
+			assert.NoError(t, err)
+
+			r, err := vr.Reader()
 			assert.NoError(t, err)
 
 			p := make([]byte, 32*1024)
@@ -131,7 +143,10 @@ func testV4[T Reader](t *testing.T, newV4 func(CredentialsProvider, func() time.
 			req.Header.Add("x-amz-decoded-content-length", "66560")
 			req.Header.Add("Content-Length", "66824")
 
-			r, err := v4.Verify(req, "")
+			vr, err := v4.Verify(req, "")
+			assert.NoError(t, err)
+
+			r, err := vr.Reader()
 			assert.NoError(t, err)
 
 			b, err := io.ReadAll(r)
@@ -166,12 +181,14 @@ func testV4[T Reader](t *testing.T, newV4 func(CredentialsProvider, func() time.
 			req.Header.Add("x-amz-trailer", "x-amz-checksum-crc32c")
 			req.Header.Add("Content-Length", "66824")
 
+			vr, err := v4.Verify(req, "")
+			assert.NoError(t, err)
+
 			cr, err := NewTrailingChecksumRequest(AlgorithmCRC32C)
 			assert.NoError(t, err)
 
-			r, err := v4.Verify(req, "")
+			r, err := vr.Reader(cr)
 			assert.NoError(t, err)
-			assert.NoError(t, r.RequestChecksums(cr))
 
 			b, err := io.ReadAll(r)
 			assert.NoError(t, err)
@@ -213,12 +230,14 @@ func testV4[T Reader](t *testing.T, newV4 func(CredentialsProvider, func() time.
 			req.Header.Add("Content-Length", strconv.Itoa(body.Len()))
 			req.Header.Add("x-amz-date", "20130524T000000Z")
 
+			vr, err := v4.Verify(req, "")
+			assert.NoError(t, err)
+
 			cr, err := NewTrailingChecksumRequest(AlgorithmCRC32)
 			assert.NoError(t, err)
 
-			r, err := v4.Verify(req, "")
+			r, err := vr.Reader(cr)
 			assert.NoError(t, err)
-			assert.NoError(t, r.RequestChecksums(cr))
 
 			b, err := io.ReadAll(r)
 			assert.NoError(t, err)
@@ -235,7 +254,10 @@ func testV4[T Reader](t *testing.T, newV4 func(CredentialsProvider, func() time.
 	t.Run("presigned", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20130524T000000Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404", nil)
 
-		r, err := v4.Verify(req, "")
+		vr, err := v4.Verify(req, "")
+		assert.NoError(t, err)
+
+		r, err := vr.Reader()
 		assert.NoError(t, err)
 
 		p := make([]byte, 32*1024)
@@ -274,7 +296,10 @@ func testV4[T Reader](t *testing.T, newV4 func(CredentialsProvider, func() time.
 
 		v4 := newV4(provider, dummyNow(2015, time.December, 29, 0, 0, 0))
 
-		r, err := v4.Verify(req, "")
+		vr, err := v4.Verify(req, "")
+		assert.NoError(t, err)
+
+		r, err := vr.Reader()
 		assert.NoError(t, err)
 
 		b, err := io.ReadAll(r)

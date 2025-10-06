@@ -21,14 +21,15 @@ func TestIntegrityReader(t *testing.T) {
 	assert.NoError(t, ei.setEncodedString(AlgorithmSHA256, "HD+Vir2FxUkFyX/o4GKP52SVcRlion2q40AzeBSG2gA="))
 	assert.NoError(t, ei.setEncodedString(algorithmHashedPayload, "1c3f958abd85c54905c97fe8e0628fe76495711962a27daae34033781486da00"))
 
-	ir := newIntegrityReader(strings.NewReader(data))
-	assert.NoError(t, ir.addAlgorithm(AlgorithmCRC32))
-	assert.NoError(t, ir.addAlgorithm(AlgorithmCRC32C))
-	assert.NoError(t, ir.addAlgorithm(AlgorithmCRC64NVME))
-	assert.NoError(t, ir.addAlgorithm(AlgorithmMD5))
-	assert.NoError(t, ir.addAlgorithm(AlgorithmSHA1))
-	assert.NoError(t, ir.addAlgorithm(AlgorithmSHA256))
-	assert.NoError(t, ir.addAlgorithm(algorithmHashedPayload))
+	ir := newIntegrityReader(strings.NewReader(data), []ChecksumAlgorithm{
+		AlgorithmCRC32,
+		AlgorithmCRC32C,
+		AlgorithmCRC64NVME,
+		AlgorithmMD5,
+		AlgorithmSHA1,
+		AlgorithmSHA256,
+		algorithmHashedPayload,
+	})
 
 	buf := bytes.NewBuffer(nil)
 

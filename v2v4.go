@@ -18,7 +18,7 @@ func NewV2V4(provider CredentialsProvider, region, service string) *V2V4 {
 	}
 }
 
-func (v2v4 *V2V4) Verify(r *http.Request, virtualHostedBucket string) (Reader, error) {
+func (v2v4 *V2V4) Verify(r *http.Request, virtualHostedBucket string) (VerifiedRequest, error) {
 	typ, params, err := mime.ParseMediaType(r.Header.Get(headerContentType))
 	if err != nil {
 		typ = ""
@@ -37,13 +37,12 @@ func (v2v4 *V2V4) Verify(r *http.Request, virtualHostedBucket string) (Reader, e
 			if err != nil {
 				return nil, err
 			}
-			return newV4Reader(file, data)
+			return newV4VerifiedRequestWithForm(file, data, form)
 		} else if form.Has(queryAWSAccessKeyId) {
-			data, err := v2v4.v2.verifyPost(r.Context(), form)
-			if err != nil {
+			if err = v2v4.v2.verifyPost(r.Context(), form); err != nil {
 				return nil, err
 			}
-			return newV2Reader(file, data), nil
+			return newV2VerifiedRequestWithForm(file, form)
 		}
 	} else if h := r.Header.Get(headerAuthorization); h != "" {
 		if strings.HasPrefix(h, v4SigningAlgorithmPrefix) {
@@ -51,25 +50,23 @@ func (v2v4 *V2V4) Verify(r *http.Request, virtualHostedBucket string) (Reader, e
 			if err != nil {
 				return nil, err
 			}
-			return newV4Reader(r.Body, data)
+			return newV4VerifiedRequest(r.Body, data)
 		}
-		data, err := v2v4.v2.verify(r, virtualHostedBucket)
-		if err != nil {
+		if err = v2v4.v2.verify(r, virtualHostedBucket); err != nil {
 			return nil, err
 		}
-		return newV2Reader(r.Body, data), nil
+		return newV2VerifiedRequest(r.Body)
 	} else if query := r.URL.Query(); query.Has(queryXAmzAlgorithm) {
 		data, err := v2v4.v4.verifyPresigned(r, query)
 		if err != nil {
 			return nil, err
 		}
-		return newV4Reader(r.Body, data)
+		return newV4VerifiedRequest(r.Body, data)
 	} else if query := r.URL.Query(); query.Has(queryAWSAccessKeyId) {
-		data, err := v2v4.v2.verifyPresigned(r, query, virtualHostedBucket)
-		if err != nil {
+		if err = v2v4.v2.verifyPresigned(r, query, virtualHostedBucket); err != nil {
 			return nil, err
 		}
-		return newV2Reader(r.Body, data), nil
+		return newV2VerifiedRequest(r.Body)
 	}
 
 	return nil, ErrMissingAuthenticationToken
