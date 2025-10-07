@@ -56,7 +56,8 @@ func NewMyCredentialsProvider() *MyCredentialsProvider {
 	}
 }
 
-// (2) Create a combined V2/V4 verifier for S3 in us-east-1. You can also create a standalone V2 only or V4 only verifier:
+// (2) Create a combined V2/V4 verifier for S3 in us-east-1.
+// You can also create a standalone V2 only or V4 only verifier:
 v2v4 := awsig.NewV2V4(NewMyCredentialsProvider(), "us-east-1", "s3")
 
 func …(w http.ResponseWriter, r *http.Request) {
@@ -83,8 +84,9 @@ func …(w http.ResponseWriter, r *http.Request) {
 	//
 	// - requested checksums are verified automatically
 	// - if the request includes a trailing checksum header, at least one checksum must be requested
-	// - MD5 is always computed and available after reading
-	// - SHA256 is computed and available after reading depending on the request type
+    // - if not explictly requested:
+	//   - MD5 is always computed and available after reading
+	//   - SHA256 is computed and available after reading depending on the request type
 	body, err := vr.Reader(sha1Req, crc32Req)
 	if err != nil {
 		…
