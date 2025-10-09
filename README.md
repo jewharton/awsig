@@ -1,28 +1,22 @@
-awsig is a server-side verification library for AWS Signature Versions 4
-and 2, intended for AWS clones written in Go.
+awsig is a Go library implementing server-side verification of AWS
+Signature Version 4 (SigV4) and AWS Signature Version 2 (SigV2) meant
+for building AWS-compatible services.
 
 ## compatibility
-
-This package follows the spec from AWS very closely, implementing SigV2
-and SigV4, though there definitely are a few blind spots—such as
-compatibility with rogue clients that send headers with a pathological
-amount of whitespace, or the exact errors that should be returned to
-indicate which AWS error code the server should respond with on
-malformed input.
 
 |       | regular signed requests | UNSIGNED-PAYLOAD | STREAMING-UNSIGNED-PAYLOAD-TRAILER | STREAMING-AWS4-HMAC-SHA256-PAYLOAD | STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER | STREAMING-AWS4-ECDSA-P256-SHA256-PAYLOAD | STREAMING-AWS4-ECDSA-P256-SHA256-PAYLOAD-TRAILER | presigned | presigned (POST) |
 |:-----:|:-----------------------:|:----------------:|:----------------------------------:|:----------------------------------:|:------------------------------------------:|:----------------------------------------:|:------------------------------------------------:|:---------:|:----------------:|
 | SigV2 |            ✓            |        n/a       |                 n/a                |                 n/a                |                     n/a                    |                    n/a                   |                        n/a                       |     ✓     |         ✓        |
 | SigV4 |            ✓            |         ✓        |                  ✓                 |                  ✓                 |                      ✓                     |              _unimplemented_             |                  _unimplemented_                 |     ✓     |         ✓        |
 
-This was written with S3 and certain security and performance
+This package was written with S3 and certain security and performance
 characteristics in mind, but it should work for other service clones as
 well.
 
 ### TODO
 
 - [ ] verify the returned errors (error codes) with the real AWS (preferably S3) or a close clone, like Ceph
-- [ ] do a shallow test run with all publicly available AWS SDKs
+- [ ] do shallow test runs with all publicly available AWS SDKs
     - [ ] SDKs act differently with and without TLS and with different checksum options
 
 ## example usage
@@ -57,7 +51,7 @@ func NewMyCredentialsProvider() *MyCredentialsProvider {
 }
 
 // (2) Create a combined V2/V4 verifier for S3 in us-east-1.
-// You can also create a standalone V2 only or V4 only verifier:
+// You can also create a standalone V2-only or V4-only verifier:
 v2v4 := awsig.NewV2V4(NewMyCredentialsProvider(), "us-east-1", "s3")
 
 func …(w http.ResponseWriter, r *http.Request) {
@@ -71,7 +65,7 @@ func …(w http.ResponseWriter, r *http.Request) {
 	//
 	// Important: if you intend to read the body, use vr.Reader() instead of r.Body.
 	//
-	// (5) Declare which checksums you want verified/computed:
+	// (5) Declare which checksums you want to be verified/computed:
 	sha1Req, err := awsig.NewChecksumRequest(awsig.AlgorithmSHA1, "ziEPrgmMDfQDTAAAQZuYfMjU4uc=")
 	if err != nil {
 		…
@@ -84,9 +78,9 @@ func …(w http.ResponseWriter, r *http.Request) {
 	//
 	// - requested checksums are verified automatically
 	// - if the request includes a trailing checksum header, at least one checksum must be requested
-    // - if not explictly requested:
+	// - if not explicitly requested:
 	//   - MD5 is always computed and available after reading
-	//   - SHA256 is computed and available after reading depending on the request type
+	//   - SHA256 is computed and available after reading, depending on the request type
 	body, err := vr.Reader(sha1Req, crc32Req)
 	if err != nil {
 		…
