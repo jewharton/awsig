@@ -11,10 +11,10 @@ type V2V4 struct {
 	v4 *V4
 }
 
-func NewV2V4(provider CredentialsProvider, region, service string) *V2V4 {
+func NewV2V4(provider CredentialsProvider, v4Config V4Config) *V2V4 {
 	return &V2V4{
 		v2: NewV2(provider),
-		v4: NewV4(provider, region, service),
+		v4: NewV4(provider, v4Config),
 	}
 }
 

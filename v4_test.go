@@ -30,7 +30,10 @@ func (v *v4Verifier) Verify(r *http.Request, _ string) (*V4VerifiedRequest, erro
 
 func TestV4(t *testing.T) {
 	newV4 := func(provider CredentialsProvider, now func() time.Time) verifier[*V4VerifiedRequest] {
-		v4 := NewV4(provider, testDefaultRegion, testDefaultService)
+		v4 := NewV4(provider, V4Config{
+			Region:  testDefaultRegion,
+			Service: testDefaultService,
+		})
 		v4.now = now
 		return &v4Verifier{v4: v4}
 	}
@@ -43,7 +46,8 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 		secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 	}
 
-	v4 := newV4(provider, dummyNow(2013, time.May, 24, 0, 0, 0))
+	now := dummyNow(2013, time.May, 24, 0, 0, 0)
+	v4 := newV4(provider, now)
 
 	t.Run("single chunk", func(t *testing.T) {
 		t.Run("GET Object", func(t *testing.T) {
@@ -339,5 +343,21 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 
 		_, err = v4.Verify(req, "")
 		assert.That(t, errors.Is(err, ErrAccessDenied))
+	})
+
+	t.Run("skip region verification", func(t *testing.T) {
+		v4 := NewV4(provider, V4Config{
+			Service:                testDefaultService,
+			SkipRegionVerification: true,
+		})
+		v4.now = now
+
+		req := httptest.NewRequest(http.MethodHead, "https://examplebucket.s3.amazonaws.com/", nil)
+		req.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/eu-west-1/s3/aws4_request,SignedHeaders=host;x-amz-content-sha256;x-amz-date,Signature=20ef61ac2576e9b79369952b7b4eaeb685c28b6b63737912ffe706ccf423f90c")
+		req.Header.Add("x-amz-content-sha256", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+		req.Header.Add("x-amz-date", "20130524T000000Z")
+
+		_, err := v4.Verify(req)
+		assert.NoError(t, err)
 	})
 }
