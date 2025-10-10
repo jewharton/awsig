@@ -532,17 +532,21 @@ func (vr *V4VerifiedRequest) Reader(reqs ...ChecksumRequest) (Reader, error) {
 
 type V4 struct {
 	provider CredentialsProvider
-	region   string
-	service  string
+	config   V4Config
 
 	now func() time.Time
 }
 
-func NewV4(provider CredentialsProvider, region, service string) *V4 {
+type V4Config struct {
+	Region                 string
+	Service                string
+	SkipRegionVerification bool
+}
+
+func NewV4(provider CredentialsProvider, config V4Config) *V4 {
 	return &V4{
 		provider: provider,
-		region:   region,
-		service:  service,
+		config:   config,
 		now:      time.Now,
 	}
 }
@@ -625,14 +629,14 @@ func (v4 *V4) parseCredential(rawCredential string, expectedDate time.Time, skip
 		)
 	}
 
-	if parts[2] != v4.region { // TODO(amwolff): make region validation optional
+	if !v4.config.SkipRegionVerification && parts[2] != v4.config.Region {
 		return parsedCredential{}, nestError(
 			ErrAuthorizationHeaderMalformed,
 			"the Credential parameter does not contain the expected region",
 		)
 	}
 
-	if parts[3] != v4.service {
+	if parts[3] != v4.config.Service {
 		return parsedCredential{}, nestError(
 			ErrAuthorizationHeaderMalformed,
 			"the Credential parameter does not contain the expected service",

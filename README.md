@@ -52,7 +52,10 @@ func NewMyCredentialsProvider() *MyCredentialsProvider {
 
 // (2) Create a combined V2/V4 verifier for S3 in us-east-1.
 // You can also create a standalone V2-only or V4-only verifier:
-v2v4 := awsig.NewV2V4(NewMyCredentialsProvider(), "us-east-1", "s3")
+v2v4 := awsig.NewV2V4(NewMyCredentialsProvider(), awsig.V4Config{
+	Region:  "us-east-1",
+	Service: "s3",
+})
 
 func …(w http.ResponseWriter, r *http.Request) {
 	// (3) Verify the incoming request:
