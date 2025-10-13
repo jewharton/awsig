@@ -143,7 +143,7 @@ func calculateSignatureV4(data signatureV4Data, secretAccessKey string) signatur
 		b.WriteByte(lf)
 	}
 
-	hex.NewEncoder(b).Write(data.digest)
+	hex.NewEncoder(b).Write(data.digest) //nolint:errcheck
 
 	return b.Sum()
 }

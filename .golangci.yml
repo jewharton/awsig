@@ -16,6 +16,11 @@ linters:
     - unused
     - whitespace
   settings:
+    errcheck:
+      exclude-functions:
+        - (*github.com/amwolff/awsig.hashBuilder).Write
+        - (*github.com/amwolff/awsig.hashBuilder).WriteByte
+        - (*github.com/amwolff/awsig.hashBuilder).WriteString
     govet:
       disable:
         - fieldalignment

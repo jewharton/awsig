@@ -358,7 +358,7 @@ func (r *V4Reader) Read(p []byte) (n int, err error) {
 			return n, r.close(p)
 		} else if length > chunkMaxLength {
 			return 0, ErrEntityTooLarge
-		} else if length < chunkMinLength && r.decodedContentLength > int(length) {
+		} else if length < chunkMinLength && r.decodedContentLength > length {
 			return 0, ErrEntityTooSmall
 		}
 	}
