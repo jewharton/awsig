@@ -558,7 +558,7 @@ func NewV4(provider CredentialsProvider, config V4Config) *V4 {
 func (v4 *V4) parseTime(main, alt string) (string, time.Time, error) {
 	parsed, err := parseTimeWithFormats(main, []string{timeFormatISO8601})
 	if err != nil {
-		parsed, err := parseTimeWithFormats(alt, httpTimeFormats)
+		parsed, err = parseTimeWithFormats(alt, httpTimeFormats)
 		if err != nil {
 			return "", time.Time{}, err
 		}

@@ -24,6 +24,7 @@ linters:
     govet:
       disable:
         - fieldalignment
+        - shadow # a ton of false positives
       enable-all: true
     misspell:
       locale: US
