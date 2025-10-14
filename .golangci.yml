@@ -21,6 +21,13 @@ linters:
         - (*github.com/amwolff/awsig.hashBuilder).Write
         - (*github.com/amwolff/awsig.hashBuilder).WriteByte
         - (*github.com/amwolff/awsig.hashBuilder).WriteString
+    gosec:
+      excludes:
+        - G101
+        - G104 # handled by errcheck
+        - G401
+        - G501
+        - G505
     govet:
       disable:
         - fieldalignment
