@@ -30,7 +30,6 @@ linters:
 formatters:
   enable:
     - goimports
-    - golines
   settings:
     goimports:
       local-prefixes:

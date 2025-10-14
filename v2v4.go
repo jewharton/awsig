@@ -62,7 +62,7 @@ func (v2v4 *V2V4) Verify(r *http.Request, virtualHostedBucket string) (VerifiedR
 			return nil, err
 		}
 		return newV4VerifiedRequest(r.Body, data)
-	} else if query := r.URL.Query(); query.Has(queryAWSAccessKeyId) {
+	} else if query.Has(queryAWSAccessKeyId) {
 		if err = v2v4.v2.verifyPresigned(r, query, virtualHostedBucket); err != nil {
 			return nil, err
 		}

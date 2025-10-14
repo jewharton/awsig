@@ -125,12 +125,14 @@ func (r *V4Reader) readChunkLength(buf []byte) (int, error) {
 		return 0, err
 	}
 
+Loop:
 	for i := 0; i < len(chunkMaxLengthEncoded) && !separatorFound; i++ {
 		if _, err = io.ReadFull(r.r, buf); err != nil {
 			return 0, err
 		}
 
-		if buf[0] == cr {
+		switch buf[0] {
+		case cr:
 			if !r.unsigned {
 				return 0, ErrIncompleteBody
 			}
@@ -140,15 +142,15 @@ func (r *V4Reader) readChunkLength(buf []byte) (int, error) {
 			}
 
 			separatorFound = true
-			break
-		} else if buf[0] == ';' {
+			break Loop
+		case ';':
 			if r.unsigned {
 				return 0, ErrIncompleteBody
 			}
 
 			separatorFound = true
-			break
-		} else {
+			break Loop
+		default:
 			rawLength = append(rawLength, buf[0])
 		}
 	}
@@ -356,9 +358,11 @@ func (r *V4Reader) Read(p []byte) (n int, err error) {
 
 		if length == 0 { // completion chunk
 			return n, r.close(p)
-		} else if length > chunkMaxLength {
+		}
+		if length > chunkMaxLength {
 			return 0, ErrEntityTooLarge
-		} else if length < chunkMinLength && r.decodedContentLength > length {
+		}
+		if length < chunkMinLength && r.decodedContentLength > length {
 			return 0, ErrEntityTooSmall
 		}
 	}
