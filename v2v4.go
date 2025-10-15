@@ -33,40 +33,43 @@ func (v2v4 *V2V4) Verify(r *http.Request, virtualHostedBucket string) (VerifiedR
 			)
 		}
 		if form.Has(queryXAmzAlgorithm) {
-			data, err := v2v4.v4.verifyPost(r.Context(), form)
+			data, accessKey, err := v2v4.v4.verifyPost(r.Context(), form)
 			if err != nil {
 				return nil, err
 			}
-			return newV4VerifiedRequestWithForm(file, data, form)
+			return newV4VerifiedRequestWithForm(file, data, form, accessKey)
 		} else if form.Has(queryAWSAccessKeyId) {
-			if err = v2v4.v2.verifyPost(r.Context(), form); err != nil {
+			accessKey, err := v2v4.v2.verifyPost(r.Context(), form)
+			if err != nil {
 				return nil, err
 			}
-			return newV2VerifiedRequestWithForm(file, form)
+			return newV2VerifiedRequestWithForm(file, form, accessKey)
 		}
 	} else if h := r.Header.Get(headerAuthorization); h != "" {
 		if strings.HasPrefix(h, v4SigningAlgorithmPrefix) {
-			data, err := v2v4.v4.verify(r)
+			data, accessKey, err := v2v4.v4.verify(r)
 			if err != nil {
 				return nil, err
 			}
-			return newV4VerifiedRequest(r.Body, data)
+			return newV4VerifiedRequest(r.Body, data, accessKey)
 		}
-		if err = v2v4.v2.verify(r, virtualHostedBucket); err != nil {
-			return nil, err
-		}
-		return newV2VerifiedRequest(r.Body)
-	} else if query := r.URL.Query(); query.Has(queryXAmzAlgorithm) {
-		data, err := v2v4.v4.verifyPresigned(r, query)
+		accessKey, err := v2v4.v2.verify(r, virtualHostedBucket)
 		if err != nil {
 			return nil, err
 		}
-		return newV4VerifiedRequest(r.Body, data)
-	} else if query.Has(queryAWSAccessKeyId) {
-		if err = v2v4.v2.verifyPresigned(r, query, virtualHostedBucket); err != nil {
+		return newV2VerifiedRequest(r.Body, accessKey)
+	} else if query := r.URL.Query(); query.Has(queryXAmzAlgorithm) {
+		data, accessKey, err := v2v4.v4.verifyPresigned(r, query)
+		if err != nil {
 			return nil, err
 		}
-		return newV2VerifiedRequest(r.Body)
+		return newV4VerifiedRequest(r.Body, data, accessKey)
+	} else if query.Has(queryAWSAccessKeyId) {
+		accessKey, err := v2v4.v2.verifyPresigned(r, query, virtualHostedBucket)
+		if err != nil {
+			return nil, err
+		}
+		return newV2VerifiedRequest(r.Body, accessKey)
 	}
 
 	return nil, ErrMissingAuthenticationToken

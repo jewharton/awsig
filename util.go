@@ -69,6 +69,11 @@ type CredentialsProvider interface {
 	Provide(ctx context.Context, accessKeyID string) (secretAccessKey string, _ error)
 }
 
+type AccessKey struct {
+	ID        string
+	SecretKey string
+}
+
 type Reader interface {
 	io.Reader
 	Checksums() (map[ChecksumAlgorithm][]byte, error)
@@ -77,6 +82,7 @@ type Reader interface {
 type VerifiedRequest interface {
 	PostForm() PostForm
 	Reader(...ChecksumRequest) (Reader, error)
+	AccessKey() AccessKey
 }
 
 type nestedError struct {

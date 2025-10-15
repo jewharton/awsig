@@ -41,6 +41,11 @@ func testV2[T VerifiedRequest](t *testing.T, newV2 func(CredentialsProvider, fun
 		vr, err := v2.Verify(req, "awsexamplebucket1")
 		assert.NoError(t, err)
 
+		assert.Equal(t, AccessKey{
+			ID:        provider.accessKeyID,
+			SecretKey: provider.secretAccessKey,
+		}, vr.AccessKey())
+
 		r, err := vr.Reader()
 		assert.NoError(t, err)
 
@@ -174,6 +179,11 @@ func testV2[T VerifiedRequest](t *testing.T, newV2 func(CredentialsProvider, fun
 		vr, err := v2.Verify(req, "")
 		assert.NoError(t, err)
 
+		assert.Equal(t, AccessKey{
+			ID:        provider2.accessKeyID,
+			SecretKey: provider2.secretAccessKey,
+		}, vr.AccessKey())
+
 		r, err := vr.Reader()
 		assert.NoError(t, err)
 
@@ -271,6 +281,11 @@ func testV2[T VerifiedRequest](t *testing.T, newV2 func(CredentialsProvider, fun
 
 		vr, err := v2.Verify(req, "johnsmith")
 		assert.NoError(t, err)
+
+		assert.Equal(t, AccessKey{
+			ID:        provider3.accessKeyID,
+			SecretKey: provider3.secretAccessKey,
+		}, vr.AccessKey())
 
 		r, err := vr.Reader()
 		assert.NoError(t, err)

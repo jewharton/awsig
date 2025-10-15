@@ -43,8 +43,9 @@ func (r *V2Reader) Checksums() (map[ChecksumAlgorithm][]byte, error) {
 }
 
 type V2VerifiedRequest struct {
-	form   PostForm
-	source io.Reader
+	form      PostForm
+	source    io.Reader
+	accessKey AccessKey
 
 	wrapped *V2Reader
 
@@ -52,16 +53,21 @@ type V2VerifiedRequest struct {
 	integrity  expectedIntegrity
 }
 
-func newV2VerifiedRequestWithForm(source io.Reader, form PostForm) (*V2VerifiedRequest, error) {
+func newV2VerifiedRequestWithForm(source io.Reader, form PostForm, accessKey AccessKey) (*V2VerifiedRequest, error) {
 	return &V2VerifiedRequest{
 		form:      form,
 		source:    source,
+		accessKey: accessKey,
 		integrity: make(expectedIntegrity),
 	}, nil
 }
 
-func newV2VerifiedRequest(source io.Reader) (*V2VerifiedRequest, error) {
-	return newV2VerifiedRequestWithForm(source, nil)
+func newV2VerifiedRequest(source io.Reader, accessKey AccessKey) (*V2VerifiedRequest, error) {
+	return newV2VerifiedRequestWithForm(source, nil, accessKey)
+}
+
+func (vr *V2VerifiedRequest) AccessKey() AccessKey {
+	return vr.accessKey
 }
 
 func (vr *V2VerifiedRequest) PostForm() PostForm {
@@ -284,11 +290,11 @@ func (v2 *V2) calculatePostSignature(data, key string) signatureV2 {
 	return hmacSHA1([]byte(key), data)
 }
 
-func (v2 *V2) verifyPost(ctx context.Context, form PostForm) error {
+func (v2 *V2) verifyPost(ctx context.Context, form PostForm) (AccessKey, error) {
 	rawSignature, _ := form.Get(querySignature)
 	signature, err := newSignatureV2FromEncoded(rawSignature)
 	if err != nil {
-		return nestError(
+		return AccessKey{}, nestError(
 			ErrInvalidSignature,
 			"the %s form field does not contain a valid signature: %w", querySignature, err,
 		)
@@ -296,7 +302,7 @@ func (v2 *V2) verifyPost(ctx context.Context, form PostForm) error {
 
 	policy, _ := form.Get(formNamePolicy)
 	if policy == "" {
-		return nestError(
+		return AccessKey{}, nestError(
 			ErrInvalidRequest,
 			"the %s form field is missing", formNamePolicy,
 		)
@@ -305,82 +311,92 @@ func (v2 *V2) verifyPost(ctx context.Context, form PostForm) error {
 	accessKeyID, _ := form.Get(queryAWSAccessKeyId)
 	secretAccessKey, err := v2.provider.Provide(ctx, accessKeyID)
 	if err != nil {
-		return err
+		return AccessKey{}, err
 	}
 
 	if !v2.calculatePostSignature(policy, secretAccessKey).compare(signature) {
-		return ErrSignatureDoesNotMatch
+		return AccessKey{}, ErrSignatureDoesNotMatch
 	}
 
-	return nil
+	return AccessKey{
+		ID:        accessKeyID,
+		SecretKey: secretAccessKey,
+	}, nil
 }
 
-func (v2 *V2) verify(r *http.Request, virtualHostedBucket string) error {
+func (v2 *V2) verify(r *http.Request, virtualHostedBucket string) (AccessKey, error) {
 	headerDateValue := r.Header.Get(headerDate)
 	parsedDateTime, err := v2.parseTime(r.Header.Get(headerXAmzDate), headerDateValue)
 	if err != nil {
-		return nestError(
+		return AccessKey{}, nestError(
 			ErrInvalidRequest,
 			"the %s or %s header does not contain a valid date: %w", headerXAmzDate, headerDate, err,
 		)
 	}
 
 	if timeSkewExceeded(v2.now, parsedDateTime, maxRequestTimeSkew) {
-		return ErrRequestTimeTooSkewed
+		return AccessKey{}, ErrRequestTimeTooSkewed
 	}
 
 	authorization, err := v2.parseAuthorization(r.Header.Get(headerAuthorization))
 	if err != nil {
-		return err
+		return AccessKey{}, err
 	}
 
 	secretAccessKey, err := v2.provider.Provide(r.Context(), authorization.accessKeyID)
 	if err != nil {
-		return err
+		return AccessKey{}, err
 	}
 
 	signature := v2.calculateSignature(r, headerDateValue, virtualHostedBucket, secretAccessKey)
 
 	if !signature.compare(authorization.signature) {
-		return ErrSignatureDoesNotMatch
+		return AccessKey{}, ErrSignatureDoesNotMatch
 	}
 
-	return nil
+	return AccessKey{
+		ID:        authorization.accessKeyID,
+		SecretKey: secretAccessKey,
+	}, nil
 }
 
-func (v2 *V2) verifyPresigned(r *http.Request, query url.Values, virtualHostedBucket string) error {
+func (v2 *V2) verifyPresigned(r *http.Request, query url.Values, virtualHostedBucket string) (AccessKey, error) {
 	rawExpires := query.Get(queryExpires)
 
 	expires, err := strconv.ParseInt(rawExpires, 10, 64)
 	if err != nil {
-		return nestError(
+		return AccessKey{}, nestError(
 			ErrInvalidRequest,
 			"the %s query parameter does not contain a valid integer: %w", queryExpires, err,
 		)
 	}
 
 	if timeOutOfBounds(v2.now, time.Time{}, time.Unix(expires, 0)) {
-		return ErrAccessDenied
+		return AccessKey{}, ErrAccessDenied
 	}
 
 	signature, err := newSignatureV2FromEncoded(query.Get(querySignature))
 	if err != nil {
-		return nestError(
+		return AccessKey{}, nestError(
 			ErrInvalidSignature,
 			"the %s query parameter does not contain a valid signature: %w", querySignature, err,
 		)
 	}
 
-	secretAccessKey, err := v2.provider.Provide(r.Context(), query.Get(queryAWSAccessKeyId))
+	accessKeyID := query.Get(queryAWSAccessKeyId)
+	secretAccessKey, err := v2.provider.Provide(r.Context(), accessKeyID)
 	if err != nil {
-		return err
+		return AccessKey{}, err
 	}
 
 	if !v2.calculateSignature(r, rawExpires, virtualHostedBucket, secretAccessKey).compare(signature) {
-		return ErrSignatureDoesNotMatch
+		return AccessKey{}, ErrSignatureDoesNotMatch
 	}
 
-	return nil
+	return AccessKey{
+		ID:        accessKeyID,
+		SecretKey: secretAccessKey,
+	}, nil
 }
 
 func (v2 *V2) Verify(r *http.Request, virtualHostedBucket string) (*V2VerifiedRequest, error) {
@@ -389,6 +405,7 @@ func (v2 *V2) Verify(r *http.Request, virtualHostedBucket string) (*V2VerifiedRe
 		typ = ""
 	}
 
+	var accessKey AccessKey
 	if r.Method == http.MethodPost && typ == "multipart/form-data" {
 		file, form, err := parseMultipartFormUntilFile(r.Body, params["boundary"])
 		if err != nil {
@@ -397,20 +414,20 @@ func (v2 *V2) Verify(r *http.Request, virtualHostedBucket string) (*V2VerifiedRe
 				"unable to parse multipart form data: %w", err,
 			)
 		}
-		if err = v2.verifyPost(r.Context(), form); err != nil {
+		if accessKey, err = v2.verifyPost(r.Context(), form); err != nil {
 			return nil, err
 		}
-		return newV2VerifiedRequestWithForm(file, form)
+		return newV2VerifiedRequestWithForm(file, form, accessKey)
 	} else if r.Header.Get(headerAuthorization) != "" {
-		if err = v2.verify(r, virtualHostedBucket); err != nil {
+		if accessKey, err = v2.verify(r, virtualHostedBucket); err != nil {
 			return nil, err
 		}
-		return newV2VerifiedRequest(r.Body)
+		return newV2VerifiedRequest(r.Body, accessKey)
 	} else if query := r.URL.Query(); query.Has(queryAWSAccessKeyId) {
-		if err = v2.verifyPresigned(r, query, virtualHostedBucket); err != nil {
+		if accessKey, err = v2.verifyPresigned(r, query, virtualHostedBucket); err != nil {
 			return nil, err
 		}
-		return newV2VerifiedRequest(r.Body)
+		return newV2VerifiedRequest(r.Body, accessKey)
 	}
 	return nil, ErrMissingAuthenticationToken
 }

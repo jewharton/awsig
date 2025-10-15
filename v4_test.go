@@ -46,6 +46,11 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 		secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 	}
 
+	expectedAccessKey := AccessKey{
+		ID:        provider.accessKeyID,
+		SecretKey: provider.secretAccessKey,
+	}
+
 	now := dummyNow(2013, time.May, 24, 0, 0, 0)
 	v4 := newV4(provider, now)
 
@@ -59,6 +64,8 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 
 			vr, err := v4.Verify(req, "")
 			assert.NoError(t, err)
+
+			assert.Equal(t, expectedAccessKey, vr.AccessKey())
 
 			r, err := vr.Reader()
 			assert.NoError(t, err)
@@ -261,6 +268,8 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 		vr, err := v4.Verify(req, "")
 		assert.NoError(t, err)
 
+		assert.Equal(t, expectedAccessKey, vr.AccessKey())
+
 		r, err := vr.Reader()
 		assert.NoError(t, err)
 
@@ -302,6 +311,8 @@ func testV4[T VerifiedRequest](t *testing.T, newV4 func(CredentialsProvider, fun
 
 		vr, err := v4.Verify(req, "")
 		assert.NoError(t, err)
+
+		assert.Equal(t, expectedAccessKey, vr.AccessKey())
 
 		r, err := vr.Reader()
 		assert.NoError(t, err)
