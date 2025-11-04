@@ -77,11 +77,11 @@ func testV2[T VerifiedRequest[exampleAuthData]](t *testing.T, newV2 func(Credent
 		assert.NoError(t, err)
 		assert.Equal(t, body, b)
 	})
-	t.Run("List", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "https://awsexamplebucket1.us-west-1.s3.amazonaws.com/?prefix=photos&max-keys=50&marker=puppy", nil)
+	t.Run("List versions", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "https://awsexamplebucket1.us-west-1.s3.amazonaws.com/?versions&prefix=photos&max-keys=50&marker=puppy", nil)
 		req.Header.Add("User-Agent", "Mozilla/5.0")
 		req.Header.Add("Date", "Tue, 27 Mar 2007 19:42:41 +0000")
-		req.Header.Add("Authorization", "AWS AKIAIOSFODNN7EXAMPLE:m0WP8eCtspQl5Ahe6L1SozdX9YA=")
+		req.Header.Add("Authorization", "AWS AKIAIOSFODNN7EXAMPLE:mi9g7igU2tMoWcHDpL4UcWKaf0I=")
 
 		v2 := newV2(provider, dummyNow(2007, time.March, 27, 19, 42, 41))
 
