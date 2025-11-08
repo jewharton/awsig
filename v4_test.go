@@ -18,6 +18,7 @@ import (
 const (
 	testDefaultRegion  = "us-east-1"
 	testDefaultService = "s3"
+	emptySHA26         = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 )
 
 type v4Verifier[T any] struct {
@@ -59,7 +60,7 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 			req := httptest.NewRequest(http.MethodGet, "https://examplebucket.s3.amazonaws.com/test.txt", nil)
 			req.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,SignedHeaders=host;range;x-amz-content-sha256;x-amz-date,Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41")
 			req.Header.Add("Range", "bytes=0-9")
-			req.Header.Add("x-amz-content-sha256", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+			req.Header.Add("x-amz-content-sha256", emptySHA26)
 			req.Header.Add("x-amz-date", "20130524T000000Z")
 
 			vr, err := v4.Verify(req, "")
@@ -97,7 +98,7 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 			req := httptest.NewRequest(http.MethodGet, "https://examplebucket.s3.amazonaws.com/?lifecycle", nil)
 			req.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,SignedHeaders=host;x-amz-content-sha256;x-amz-date,Signature=fea454ca298b7da1c68078a5d1bdbfbbe0d65c699e0f91ac7a200a0136783543")
 			req.Header.Add("x-amz-date", "20130524T000000Z")
-			req.Header.Add("x-amz-content-sha256", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+			req.Header.Add("x-amz-content-sha256", emptySHA26)
 
 			vr, err := v4.Verify(req, "")
 			assert.NoError(t, err)
@@ -115,7 +116,7 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 			req := httptest.NewRequest(http.MethodGet, "https://examplebucket.s3.amazonaws.com/?max-keys=2&prefix=J", nil)
 			req.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,SignedHeaders=host;x-amz-content-sha256;x-amz-date,Signature=34b48302e7b5fa45bde8084f4b7868a86f0a534bc59db6670ed5711ef69dc6f7")
 			req.Header.Add("x-amz-date", "20130524T000000Z")
-			req.Header.Add("x-amz-content-sha256", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+			req.Header.Add("x-amz-content-sha256", emptySHA26)
 
 			vr, err := v4.Verify(req, "")
 			assert.NoError(t, err)
@@ -368,6 +369,26 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 		assert.NoError(t, err)
 	})
 
+	t.Run("unexpectedly unsigned header", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "https://examplebucket.s3.amazonaws.com/", nil)
+		req.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,SignedHeaders=host,Signature=318afc781706918b0d491c116d674bd334445cd589a808daf14142adabad79f5")
+		req.Header.Add("x-amz-content-sha256", emptySHA26)
+		req.Header.Add("x-amz-date", "20130524T000000Z") // if present, required to be in SignedHeaders
+
+		_, err := v4.Verify(req, "")
+		assert.That(t, errors.Is(err, ErrAccessDenied))
+	})
+
+	t.Run("permissibly unsigned header", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "https://examplebucket.s3.amazonaws.com/", nil)
+		req.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,SignedHeaders=host;x-amz-date,Signature=a9fbf544a39d0dde459000ebc7dcb80edb69e7a2b61d92296e36ea4114bea7a0")
+		req.Header.Add("x-amz-content-sha256", emptySHA26) // not required to be in SignedHeaders
+		req.Header.Add("x-amz-date", "20130524T000000Z")
+
+		_, err := v4.Verify(req, "")
+		assert.NoError(t, err)
+	})
+
 	t.Run("presigned with valid and correct X-Amz-Content-Sha256", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20130524T000000Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host%3Bx-amz-content-sha256&X-Amz-Signature=b5b92f39a5ff837795461644993ce486dd485b7622264c40f89b2a9b069ab5a0", strings.NewReader(putContent))
 		req.Header.Add("X-Amz-Content-Sha256", putContentSHA256)
@@ -420,7 +441,7 @@ func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(Credent
 
 		req := httptest.NewRequest(http.MethodHead, "https://examplebucket.s3.amazonaws.com/", nil)
 		req.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/eu-west-1/s3/aws4_request,SignedHeaders=host;x-amz-content-sha256;x-amz-date,Signature=20ef61ac2576e9b79369952b7b4eaeb685c28b6b63737912ffe706ccf423f90c")
-		req.Header.Add("x-amz-content-sha256", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+		req.Header.Add("x-amz-content-sha256", emptySHA26)
 		req.Header.Add("x-amz-date", "20130524T000000Z")
 
 		_, err := v4.Verify(req)
