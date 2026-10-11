@@ -161,7 +161,7 @@ Loop:
 	}
 
 	length, err := strconv.ParseInt(string(rawLength), 16, 64)
-	if err != nil {
+	if err != nil || length < 0 {
 		return 0, ErrInvalidRequest
 	}
 
@@ -917,7 +917,7 @@ func (v4 *V4[T]) decodedContentLength(headers http.Header) (int64, error) {
 	}
 
 	decodedContentLength, err := strconv.ParseInt(rawDecodedContentLength, 10, 64)
-	if err != nil {
+	if err != nil || decodedContentLength < 0 {
 		return 0, ErrInvalidXAmzDecodedContentLength
 	}
 

@@ -40,6 +40,55 @@ func TestV4(t *testing.T) {
 	testV4(t, newV4)
 }
 
+func FuzzV4Reader(f *testing.F) {
+	const zeroSignature = "0000000000000000000000000000000000000000000000000000000000000000"
+
+	f.Add([]byte("a;chunk-signature="+zeroSignature+"\r\n0123456789\r\n0;chunk-signature="+zeroSignature+"\r\n"), false, false, int64(10))
+	f.Add([]byte("a\r\n0123456789\r\n0\r\nx-amz-checksum-crc32:AAAAAA==\r\n\r\n"), true, true, int64(10))
+	f.Add([]byte("-1\r\n"), true, false, int64(-1))
+
+	f.Fuzz(func(t *testing.T, body []byte, unsigned, trailer bool, decodedContentLength int64) {
+		vr, err := newV4VerifiedRequest(bytes.NewReader(body), v4VerifiedData[any]{
+			dateTime: "20130524T000000Z",
+			credential: parsedCredential{
+				scope: scope{
+					date:    "20130524",
+					region:  testDefaultRegion,
+					service: testDefaultService,
+				},
+			},
+			options: parsedXAmzContentSHA256{
+				unsigned:             unsigned,
+				streaming:            true,
+				signingAlgo:          algorithmHMACSHA256,
+				trailer:              trailer,
+				decodedContentLength: decodedContentLength,
+			},
+			secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+		})
+
+		var reqs []ChecksumRequest
+		if trailer {
+			cr, err := NewTrailingChecksumRequest(AlgorithmCRC32)
+			assert.NoError(t, err)
+			reqs = append(reqs, cr)
+		}
+
+		r, err := vr.Reader(reqs...)
+		if err != nil {
+			return
+		}
+
+		if _, err = io.Copy(io.Discard, r); err != nil {
+			return
+		} else if !unsigned || trailer {
+			// it's almost certain that something's wrong if that copy
+			// has succeded.
+			t.Errorf("succeeded? with %x, %t, %t, %d", body, unsigned, trailer, decodedContentLength)
+		}
+	})
+}
+
 func testV4[T VerifiedRequest[exampleAuthData]](t *testing.T, newV4 func(CredentialsProvider[exampleAuthData], func() time.Time) verifier[T]) {
 	const accessKeyID = "AKIAIOSFODNN7EXAMPLE"
 
