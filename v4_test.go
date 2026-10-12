@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	testDefaultRegion  = "us-east-1"
-	testDefaultService = "s3"
+	testDefaultRegion    = "us-east-1"
+	testDefaultService   = "s3"
+	testBogusSignatureV4 = "0000000000000000000000000000000000000000000000000000000000000000"
 )
 
 type v4Verifier[T any] struct {
@@ -28,22 +29,54 @@ func (v *v4Verifier[T]) Verify(r *http.Request, _ string) (*V4VerifiedRequest[T]
 	return v.v4.Verify(r)
 }
 
+var newV4 = func(provider CredentialsProvider[exampleAuthData], now func() time.Time) verifier[*V4VerifiedRequest[exampleAuthData]] {
+	v4 := NewV4(provider, V4Config{
+		Region:  testDefaultRegion,
+		Service: testDefaultService,
+	})
+	v4.now = now
+	return &v4Verifier[exampleAuthData]{v4: v4}
+}
+
 func TestV4(t *testing.T) {
-	newV4 := func(provider CredentialsProvider[exampleAuthData], now func() time.Time) verifier[*V4VerifiedRequest[exampleAuthData]] {
-		v4 := NewV4(provider, V4Config{
-			Region:  testDefaultRegion,
-			Service: testDefaultService,
-		})
-		v4.now = now
-		return &v4Verifier[exampleAuthData]{v4: v4}
-	}
 	testV4(t, newV4)
 }
 
-func FuzzV4Reader(f *testing.F) {
-	const zeroSignature = "0000000000000000000000000000000000000000000000000000000000000000"
+func FuzzV4(f *testing.F) {
+	const (
+		accessKeyID     = "AKIAIOSFODNN7EXAMPLE"
+		secretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	)
 
-	f.Add([]byte("a;chunk-signature="+zeroSignature+"\r\n0123456789\r\n0;chunk-signature="+zeroSignature+"\r\n"), false, false, int64(10))
+	f.Add(accessKeyID, secretAccessKey, uint(0), []byte(nil), "AWS4-HMAC-SHA256 Credential="+accessKeyID+"/20130524/us-east-1/s3/aws4_request,SignedHeaders=host;x-amz-content-sha256;x-amz-date,Signature="+testBogusSignatureV4, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", 0, 0)
+	f.Add(accessKeyID, secretAccessKey, uint(3), []byte("a;chunk-signature="+testBogusSignatureV4+"\r\n0123456789\r\n0;chunk-signature="+testBogusSignatureV4+"\r\n"), "AWS4-HMAC-SHA256 Credential="+accessKeyID+"/20130524/us-east-1/s3/aws4_request,SignedHeaders=content-encoding;content-length;host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length,Signature="+testBogusSignatureV4, "STREAMING-AWS4-HMAC-SHA256-PAYLOAD", 10, 180)
+
+	now := dummyNow(2013, time.May, 24, 0, 0, 0)
+
+	f.Fuzz(func(t *testing.T, accessKeyID, secretAccessKey string, methodIdx uint, body []byte, authorization, contentSHA256 string, contentLength, decodedContentLength int) {
+		req := httptest.NewRequest(httpMethodByIdx(methodIdx), "https://examplebucket.s3.amazonaws.com/test.txt", bytes.NewReader(body))
+		req.Header.Add("Authorization", authorization)
+		switch contentSHA256 {
+		case streamingUnsignedPayloadTrailer, streamingAWS4HMACSHA256Payload, streamingAWS4HMACSHA256PayloadTrailer:
+			req.Header.Add("Content-Encoding", "aws-chunked")
+			req.Header.Add("x-amz-decoded-content-length", strconv.Itoa(decodedContentLength))
+		}
+		req.Header.Add("Content-Length", strconv.Itoa(contentLength))
+		req.Header.Add("x-amz-content-sha256", contentSHA256)
+		req.Header.Add("x-amz-date", "20130524T000000Z")
+
+		provider := simpleCredentialsProvider{
+			accessKeyID:     accessKeyID,
+			secretAccessKey: secretAccessKey,
+		}
+
+		_, err := newV4(provider, now).Verify(req, "")
+		assert.Error(t, err)
+	})
+}
+
+func FuzzV4Reader(f *testing.F) {
+	f.Add([]byte("a;chunk-signature="+testBogusSignatureV4+"\r\n0123456789\r\n0;chunk-signature="+testBogusSignatureV4+"\r\n"), false, false, int64(10))
 	f.Add([]byte("a\r\n0123456789\r\n0\r\nx-amz-checksum-crc32:AAAAAA==\r\n\r\n"), true, true, int64(10))
 	f.Add([]byte("-1\r\n"), true, false, int64(-1))
 

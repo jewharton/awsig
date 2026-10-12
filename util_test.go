@@ -340,3 +340,17 @@ func dummyNow(year int, month time.Month, day, hour, min, sec int) func() time.T
 		return time.Date(year, month, day, hour, min, sec, 0, time.UTC)
 	}
 }
+
+func httpMethodByIdx(idx uint) string {
+	return []string{
+		http.MethodGet,
+		http.MethodHead,
+		http.MethodPost,
+		http.MethodPut,
+		http.MethodPatch,
+		http.MethodDelete,
+		http.MethodConnect,
+		http.MethodOptions,
+		http.MethodTrace,
+	}[idx%9]
+}

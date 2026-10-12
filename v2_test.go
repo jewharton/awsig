@@ -16,13 +16,42 @@ import (
 	"github.com/zeebo/assert"
 )
 
+const testBogusSignatureV2 = "AAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+var newV2 = func(provider CredentialsProvider[exampleAuthData], now func() time.Time) verifier[*V2VerifiedRequest[exampleAuthData]] {
+	v2 := NewV2(provider)
+	v2.now = now
+	return v2
+}
+
 func TestV2(t *testing.T) {
-	newV2 := func(provider CredentialsProvider[exampleAuthData], now func() time.Time) verifier[*V2VerifiedRequest[exampleAuthData]] {
-		v2 := NewV2(provider)
-		v2.now = now
-		return v2
-	}
 	testV2(t, newV2)
+}
+
+func FuzzV2(f *testing.F) {
+	const (
+		accessKeyID     = "AKIAIOSFODNN7EXAMPLE"
+		secretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	)
+
+	f.Add(accessKeyID, secretAccessKey, uint(0), []byte(nil), "AWS "+accessKeyID+":"+testBogusSignatureV2)
+	f.Add(accessKeyID, secretAccessKey, uint(3), []byte("1234567890"), "AWS "+accessKeyID+":"+testBogusSignatureV2)
+
+	now := dummyNow(2007, time.March, 27, 19, 36, 42)
+
+	f.Fuzz(func(t *testing.T, accessKeyID, secretAccessKey string, methodIdx uint, body []byte, authorization string) {
+		req := httptest.NewRequest(httpMethodByIdx(methodIdx), "https://awsexamplebucket1.us-west-1.s3.amazonaws.com/photos/puppy.jpg", bytes.NewReader(body))
+		req.Header.Add("Authorization", authorization)
+		req.Header.Add("Date", "Tue, 27 Mar 2007 19:36:42 +0000")
+
+		provider := simpleCredentialsProvider{
+			accessKeyID:     accessKeyID,
+			secretAccessKey: secretAccessKey,
+		}
+
+		_, err := newV2(provider, now).Verify(req, "awsexamplebucket1")
+		assert.Error(t, err)
+	})
 }
 
 func testV2[T VerifiedRequest[exampleAuthData]](t *testing.T, newV2 func(CredentialsProvider[exampleAuthData], func() time.Time) verifier[T]) {
