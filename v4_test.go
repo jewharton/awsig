@@ -49,7 +49,7 @@ func FuzzV4(f *testing.F) {
 	)
 
 	f.Add(accessKeyID, secretAccessKey, uint(0), []byte(nil), "AWS4-HMAC-SHA256 Credential="+accessKeyID+"/20130524/us-east-1/s3/aws4_request,SignedHeaders=host;x-amz-content-sha256;x-amz-date,Signature="+testBogusSignatureV4, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", 0, 0)
-	f.Add(accessKeyID, secretAccessKey, uint(3), []byte("a;chunk-signature="+testBogusSignatureV4+"\r\n0123456789\r\n0;chunk-signature="+testBogusSignatureV4+"\r\n"), "AWS4-HMAC-SHA256 Credential="+accessKeyID+"/20130524/us-east-1/s3/aws4_request,SignedHeaders=content-encoding;content-length;host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length,Signature="+testBogusSignatureV4, "STREAMING-AWS4-HMAC-SHA256-PAYLOAD", 10, 180)
+	f.Add(accessKeyID, secretAccessKey, uint(3), []byte("a;chunk-signature="+testBogusSignatureV4+"\r\n0123456789\r\n0;chunk-signature="+testBogusSignatureV4+"\r\n"), "AWS4-HMAC-SHA256 Credential="+accessKeyID+"/20130524/us-east-1/s3/aws4_request,SignedHeaders=content-encoding;content-length;host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length,Signature="+testBogusSignatureV4, "STREAMING-AWS4-HMAC-SHA256-PAYLOAD", 180, 10)
 
 	now := dummyNow(2013, time.May, 24, 0, 0, 0)
 
@@ -78,6 +78,7 @@ func FuzzV4(f *testing.F) {
 func FuzzV4Reader(f *testing.F) {
 	f.Add([]byte("a;chunk-signature="+testBogusSignatureV4+"\r\n0123456789\r\n0;chunk-signature="+testBogusSignatureV4+"\r\n"), false, false, int64(10))
 	f.Add([]byte("a\r\n0123456789\r\n0\r\nx-amz-checksum-crc32:AAAAAA==\r\n\r\n"), true, true, int64(10))
+	f.Add([]byte("a\r\n0123456789\r\n0\r\nx-amz-checksum-crc32:poTHxg==\r\n\r\n"), true, true, int64(10))
 	f.Add([]byte("-1\r\n"), true, false, int64(-1))
 
 	f.Fuzz(func(t *testing.T, body []byte, unsigned, trailer bool, decodedContentLength int64) {
@@ -99,6 +100,7 @@ func FuzzV4Reader(f *testing.F) {
 			},
 			secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 		})
+		assert.NoError(t, err)
 
 		var reqs []ChecksumRequest
 		if trailer {
@@ -114,9 +116,9 @@ func FuzzV4Reader(f *testing.F) {
 
 		if _, err = io.Copy(io.Discard, r); err != nil {
 			return
-		} else if !unsigned || trailer {
+		} else if !unsigned {
 			// it's almost certain that something's wrong if that copy
-			// has succeded.
+			// has succeeded.
 			t.Errorf("succeeded? with %x, %t, %t, %d", body, unsigned, trailer, decodedContentLength)
 		}
 	})

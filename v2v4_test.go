@@ -32,13 +32,13 @@ func FuzzV2V4(f *testing.F) {
 	)
 
 	f.Add(true, accessKeyID, secretAccessKey, uint(0), []byte(nil), "AWS4-HMAC-SHA256 Credential="+accessKeyID+"/20130524/us-east-1/s3/aws4_request,SignedHeaders=host;x-amz-content-sha256;x-amz-date,Signature="+testBogusSignatureV4, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", 0, 0)
-	f.Add(true, accessKeyID, secretAccessKey, uint(3), []byte("a;chunk-signature="+testBogusSignatureV4+"\r\n0123456789\r\n0;chunk-signature="+testBogusSignatureV4+"\r\n"), "AWS4-HMAC-SHA256 Credential="+accessKeyID+"/20130524/us-east-1/s3/aws4_request,SignedHeaders=content-encoding;content-length;host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length,Signature="+testBogusSignatureV4, "STREAMING-AWS4-HMAC-SHA256-PAYLOAD", 10, 180)
+	f.Add(true, accessKeyID, secretAccessKey, uint(3), []byte("a;chunk-signature="+testBogusSignatureV4+"\r\n0123456789\r\n0;chunk-signature="+testBogusSignatureV4+"\r\n"), "AWS4-HMAC-SHA256 Credential="+accessKeyID+"/20130524/us-east-1/s3/aws4_request,SignedHeaders=content-encoding;content-length;host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length,Signature="+testBogusSignatureV4, "STREAMING-AWS4-HMAC-SHA256-PAYLOAD", 180, 10)
 	f.Add(false, accessKeyID, secretAccessKey, uint(0), []byte(nil), "AWS "+accessKeyID+":"+testBogusSignatureV2, "", 0, 0)
 	f.Add(false, accessKeyID, secretAccessKey, uint(3), []byte("1234567890"), "AWS "+accessKeyID+":"+testBogusSignatureV2, "", 0, 0)
 
-	var now func() time.Time
-
 	f.Fuzz(func(t *testing.T, v4 bool, accessKeyID, secretAccessKey string, methodIdx uint, body []byte, authorization, contentSHA256 string, contentLength, decodedContentLength int) {
+		var now func() time.Time
+
 		req := httptest.NewRequest(httpMethodByIdx(methodIdx), "https://examplebucket.s3.amazonaws.com/test.txt", bytes.NewReader(body))
 		req.Header.Add("Authorization", authorization)
 		if v4 {
@@ -61,7 +61,7 @@ func FuzzV2V4(f *testing.F) {
 			secretAccessKey: secretAccessKey,
 		}
 
-		_, err := newV2V4(provider, now).Verify(req, "")
+		_, err := newV2V4(provider, now).Verify(req, "examplebucket")
 		assert.Error(t, err)
 	})
 }
